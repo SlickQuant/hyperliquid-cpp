@@ -42,34 +42,25 @@ jobs:
         shell: pwsh
         run: .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      # slick-net does not support arm64; force x64 on Apple Silicon runners.
-      - name: Force x64 triplet (macOS)
-        if: runner.os == 'macOS'
-        run: echo "VCPKG_DEFAULT_TRIPLET=x64-osx" >> $GITHUB_ENV
-
       - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: |
             ${{ github.workspace }}/vcpkg/installed
             ${{ github.workspace }}/vcpkg-binary-cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'overlay-ports/**') }}
           restore-keys: vcpkg-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
-          "$VCPKG_ROOT/vcpkg" install nlohmann-json openssl gtest slick-net
+          "$VCPKG_ROOT/vcpkg" install nlohmann-json openssl gtest slick-net \
+            --overlay-ports=${{ github.workspace }}/overlay-ports
 
       - name: Configure
         run: |
-          EXTRA_ARGS=""
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            EXTRA_ARGS="-DCMAKE_OSX_ARCHITECTURES=x86_64"
-          fi
           cmake -S . -B build \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DCMAKE_BUILD_TYPE=Release \
-            $EXTRA_ARGS
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
         run: cmake --build build --config Release --parallel
