@@ -2,6 +2,7 @@
 
 A C++20 SDK for the [Hyperliquid](https://hyperliquid.xyz) DEX API — REST market data, authenticated trading, and real-time WebSocket subscriptions, with native EIP-712 signing.
 
+[![CI](https://github.com/SlickQuant/hyperliquid-cpp/actions/workflows/ci.yml/badge.svg)](https://github.com/SlickQuant/hyperliquid-cpp/actions/workflows/ci.yml)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
