@@ -64,8 +64,8 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Unit tests
-        run: ctest --test-dir build -R hyperliquid_tests --output-on-failure
+        run: ctest --test-dir build -C Release -R hyperliquid_tests --output-on-failure
 
       - name: Integration tests
-        run: ctest --test-dir build -R hyperliquid_integration_tests --output-on-failure
+        run: ctest --test-dir build -C Release -R hyperliquid_integration_tests --output-on-failure
         timeout-minutes: 5
