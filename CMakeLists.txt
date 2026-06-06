@@ -11,6 +11,8 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
+include(FetchContent)
+
 find_package(slick-net 2.1.0 CONFIG QUIET)
 if (NOT slick-net_FOUND)
     message(STATUS "Fetching slick-net...")
