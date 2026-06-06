@@ -14,6 +14,12 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+// Target the OpenSSL 1.1.0 API so the low-level EC_KEY routines used here
+// (still fully supported, just superseded by EVP_PKEY in 3.0) don't trigger
+// -Wdeprecated-declarations.
+#ifndef OPENSSL_API_COMPAT
+#define OPENSSL_API_COMPAT 0x10100000L
+#endif
 #include <openssl/bn.h>
 #include <openssl/ec.h>
 #include <openssl/ecdsa.h>
