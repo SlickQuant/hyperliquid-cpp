@@ -68,3 +68,5 @@ vcpkg_installed/
 Testing/
 .cache/
 test_results.json
+
+.vscode/

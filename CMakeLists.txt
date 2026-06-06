@@ -10,7 +10,19 @@ endif()
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(slick-net CONFIG REQUIRED)
+
+find_package(slick-net 2.1.0 CONFIG QUIET)
+if (NOT slick-net_FOUND)
+    message(STATUS "Fetching slick-net...")
+    FetchContent_Declare(
+        slick-net
+        GIT_REPOSITORY https://github.com/SlickQuant/slick-net.git
+        GIT_TAG v2.1.0
+    )
+    FetchContent_MakeAvailable(slick-net)
+else()
+    message(STATUS "Found slick-net: ${slick-net_DIR}")
+endif()
 
 add_library(hyperliquid
     src/api.cpp
