@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1]
+
+### Added
+- `install()` rules and generated CMake package-config files (`hyperliquid-config.cmake`, `hyperliquid-config-version.cmake`, `hyperliquid-targets.cmake`) so the library can be consumed via `find_package(hyperliquid CONFIG REQUIRED)` after `cmake --install` / `vcpkg install`
+- `HYPERLIQUID_BUILD_TESTS` and `HYPERLIQUID_BUILD_EXAMPLES` CMake options — default `ON` for top-level builds, automatically `OFF` when the project is consumed via `add_subdirectory`/`FetchContent`
+
+### Changed
+- `target_compile_features(hyperliquid PUBLIC cxx_std_20)` — the C++20 requirement now propagates to consumers through the exported target
+- Raised minimum CMake version from 3.20 to 3.21 (required for `PROJECT_IS_TOP_LEVEL`)
+
 ## [0.1.0] — 2026-06-06
 
 ### Added
