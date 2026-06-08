@@ -28,7 +28,7 @@ else()
     message(STATUS "Found slick-net: ${slick-net_DIR}")
 endif()
 
-add_library(hyperliquid
+add_library(hyperliquid STATIC
     src/api.cpp
     src/info.cpp
     src/exchange.cpp
