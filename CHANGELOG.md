@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.1]
+## [0.1.1] - 2026-06-08
 
 ### Added
 - `install()` rules and generated CMake package-config files (`hyperliquid-config.cmake`, `hyperliquid-config-version.cmake`, `hyperliquid-targets.cmake`) so the library can be consumed via `find_package(hyperliquid CONFIG REQUIRED)` after `cmake --install` / `vcpkg install`
