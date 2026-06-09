@@ -262,6 +262,95 @@ TEST_F(WsIntegration, UnsubscribeStopsDelivery) {
     EXPECT_LE(counter->load() - count_at_unsub, 1);
 }
 
+// ── unsubscribe blocks until an in-flight callback returns ────────────────────
+// Regression test for the race: on_message copies callbacks under the lock,
+// releases the lock, then invokes them.  Without the fix, a concurrent
+// unsubscribe() could return (and the owner could be destroyed) before the
+// copied callback fired, causing a use-after-free on the captured this pointer.
+// With the fix, unsubscribe() must not return until the in-flight callback has
+// fully returned.
+
+TEST_F(WsIntegration, UnsubscribeBlocksUntilCallbackCompletes) {
+    std::mutex cb_mtx;
+    std::condition_variable cb_cv;
+    bool entered  = false;
+    bool may_exit = false;
+
+    const json kSub{{"type", "allMids"}};
+    int sid = info_->subscribe(kSub, [&](const json&) {
+        { std::lock_guard lk(cb_mtx); entered = true; }
+        cb_cv.notify_all();
+        // Hold here to simulate a slow callback; the test releases us below.
+        std::unique_lock lk(cb_mtx);
+        cb_cv.wait(lk, [&] { return may_exit; });
+    });
+
+    // Wait for the first dispatch to enter the callback body.
+    bool started;
+    {
+        std::unique_lock lk(cb_mtx);
+        started = cb_cv.wait_for(lk, kMsgTimeout, [&] { return entered; });
+    }
+
+    // Call unsubscribe from a second thread while the callback is still
+    // executing inside its body.
+    std::atomic<bool> unsub_done{false};
+    std::thread unsub_thr([&] {
+        info_->unsubscribe(kSub, sid);
+        unsub_done = true;
+    });
+
+    // Give the unsubscribe thread time to reach its internal wait-for-drain path.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    bool still_blocked = !unsub_done.load();
+
+    // Release the blocking callback, then wait for everything to drain.
+    { std::lock_guard lk(cb_mtx); may_exit = true; }
+    cb_cv.notify_all();
+    unsub_thr.join();
+
+    ASSERT_TRUE(started)       << "allMids callback never started — connection issue?";
+    EXPECT_TRUE(still_blocked) << "unsubscribe returned before in-flight callback finished";
+    EXPECT_TRUE(unsub_done.load());
+}
+
+// ── callback can remove a later callback from the same dispatch ───────────────
+// Regression test for the remaining snapshot hazard: callback A unsubscribes
+// callback B while both are present in the same loaded snapshot. B must be
+// skipped before invocation, not merely removed from future snapshots.
+
+TEST_F(WsIntegration, CallbackCanRemoveLaterCallbackFromSameDispatch) {
+    auto w = std::make_shared<Waiter>();
+    const json kSub{{"type", "allMids"}};
+
+    std::atomic<bool> armed{false};
+    std::atomic<bool> removed{false};
+    std::atomic<int> b_calls{0};
+
+    int sid_b = 0;
+    int sid_a = info_->subscribe(kSub, [&](const json& m) {
+        if (!armed.load(std::memory_order_acquire))
+            return;
+        if (!removed.exchange(true, std::memory_order_acq_rel))
+            info_->unsubscribe(kSub, sid_b);
+        w->set(m);
+    });
+    sid_b = info_->subscribe(kSub, [&](const json&) {
+        if (armed.load(std::memory_order_acquire))
+            ++b_calls;
+    });
+
+    armed.store(true, std::memory_order_release);
+    ASSERT_TRUE(w->wait()) << "Timed out waiting for allMids dispatch";
+
+    // Give the IO thread a moment to finish the same dispatch and confirm that
+    // sid_b was not invoked after sid_a removed it.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(b_calls.load(), 0) << "Later callback still fired after mid-dispatch removal";
+
+    info_->unsubscribe(kSub, sid_a);
+}
+
 // ── Partial unsubscribe (one of two callbacks removed) ────────────────────────
 
 TEST_F(WsIntegration, UnsubscribeOneCallbackLeavesOther) {

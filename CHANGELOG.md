@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.2] - 2026-06-09
+
+### Fixed
+- **`WebsocketManager`: use-after-free / same-dispatch unsubscribe race** — callbacks now dispatch from a lock-free snapshot of shared handler state instead of copying `std::function`s under a mutex. Each callback entry carries an `active` flag and `in_flight` counter: `unsubscribe()` removes the callback from future snapshots, marks that specific callback inactive, and waits on its per-callback in-flight count with C++20 atomic wait/notify. This prevents a later callback from firing after being removed earlier in the same snapshot while still allowing self-unsubscribe without deadlocking.
+
+### Changed
+- **`WebsocketManager`: removed `pending_subs_` pre-connection queue** — the underlying `slick::net::Websocket` already buffers outbound frames until the connection is established, making the manual pending-subscription queue redundant. `subscribe()` and `unsubscribe()` now call `ws_->send()` unconditionally; `flush_pending()`, `writer_mutex_`, and the `pending_subs_` vector are all removed.
+
+### Tests
+- **`UnsubscribeBlocksUntilCallbackCompletes`** (integration) — regression test for the above fix; subscribes with a callback that blocks until explicitly released, calls `unsubscribe()` concurrently from a second thread, and asserts that `unsubscribe()` does not return before the in-flight callback has finished.
+- **`CallbackCanRemoveLaterCallbackFromSameDispatch`** (integration) — regression test for the snapshot hazard where callback A unsubscribes callback B on the same channel before the dispatcher reaches B in the already-loaded snapshot.
+
 ## [0.1.1] - 2026-06-08
 
 ### Added

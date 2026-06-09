@@ -7,8 +7,21 @@
 
 #include <chrono>
 #include <iostream>
-#include <stdexcept>
 #include <thread>
+
+namespace {
+    // Points at the callback currently executing on the WebSocket IO thread.
+    // unsubscribe() uses this to avoid deadlocking when a callback removes itself.
+    thread_local const void* dispatching_handler = nullptr;
+
+    void wait_for_zero(std::atomic<unsigned int>& counter) {
+        unsigned int in_flight = counter.load(std::memory_order_acquire);
+        while (in_flight != 0) {
+            counter.wait(in_flight, std::memory_order_relaxed);
+            in_flight = counter.load(std::memory_order_acquire);
+        }
+    }
+}
 
 namespace hyperliquid {
 
@@ -57,6 +70,7 @@ std::string WebsocketManager::to_identifier(const nlohmann::json& sub) {
 
 WebsocketManager::WebsocketManager(std::string_view http_base_url)
     : ws_url_(http_to_ws_url(http_base_url))
+    , handlers_(std::make_shared<HandlerMap>())
 {
     ws_ = std::make_unique<slick::net::Websocket>(
         ws_url_,
@@ -80,12 +94,11 @@ WebsocketManager::~WebsocketManager() {
 // ── Connection callbacks ──────────────────────────────────────────────────────
 
 void WebsocketManager::on_connected() {
-    connected_ = true;
-    flush_pending();
+    connected_.store(true, std::memory_order_release);
 }
 
 void WebsocketManager::on_disconnected() {
-    connected_ = false;
+    connected_.store(false, std::memory_order_release);
 }
 
 void WebsocketManager::on_message(const char* data, std::size_t len) {
@@ -113,21 +126,42 @@ void WebsocketManager::on_message(const char* data, std::size_t len) {
             identifier = channel + ":" + d["user"].get<std::string>();
     }
 
-    std::vector<std::function<void(const nlohmann::json&)>> cbs;
-    {
-        std::lock_guard lock(mutex_);
-        auto it = handlers_.find(identifier);
-        if (it == handlers_.end()) {
-            // Try without suffix (e.g. allMids has no coin)
-            it = handlers_.find(channel);
-        }
-        if (it != handlers_.end()) {
-            for (const auto& [id, cb] : it->second)
-                cbs.push_back(cb);
-        }
-    }
+    // Lock-free snapshot: atomically borrow a reference to the current map.
+    // Each callback entry carries its own active/in-flight state so a callback
+    // removed mid-dispatch can still be skipped before invocation.
+    auto h = handlers_.load(std::memory_order_acquire);
+    auto it = h->find(identifier);
+    if (it == h->end())
+        it = h->find(channel);   // fallback for channels without a suffix (allMids)
+    if (it == h->end())
+        return;
 
-    for (auto& cb : cbs) cb(msg);
+    for (const auto& handler : it->second) {
+        if (!handler->active.load(std::memory_order_acquire))
+            continue;
+
+        handler->in_flight.fetch_add(1, std::memory_order_acq_rel);
+        if (!handler->active.load(std::memory_order_acquire)) {
+            if (handler->in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                handler->in_flight.notify_all();
+            continue;
+        }
+
+        const void* previous = dispatching_handler;
+        dispatching_handler = handler.get();
+        try {
+            handler->callback(msg);
+        } catch (...) {
+            dispatching_handler = previous;
+            if (handler->in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                handler->in_flight.notify_all();
+            throw;
+        }
+        dispatching_handler = previous;
+
+        if (handler->in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            handler->in_flight.notify_all();
+    }
 }
 
 void WebsocketManager::on_error(std::string err) {
@@ -139,26 +173,10 @@ void WebsocketManager::on_error(std::string err) {
 void WebsocketManager::ping_loop() {
     while (running_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (connected_ && ws_) {
+        if (connected_.load(std::memory_order_acquire) && ws_) {
             static const std::string ping_msg = R"({"method":"ping"})";
             ws_->send(ping_msg.c_str(), ping_msg.size());
         }
-    }
-}
-
-// ── Pending subscription flush ────────────────────────────────────────────────
-
-void WebsocketManager::flush_pending() {
-    std::vector<nlohmann::json> subs;
-    {
-        std::lock_guard lock(mutex_);
-        subs = std::move(pending_subs_);
-        pending_subs_.clear();
-    }
-    for (const auto& sub : subs) {
-        nlohmann::json msg{{"method", "subscribe"}, {"subscription", sub}};
-        std::string s = msg.dump();
-        ws_->send(s.c_str(), s.size());
     }
 }
 
@@ -171,18 +189,23 @@ int WebsocketManager::subscribe(
     int id = next_id_.fetch_add(1);
     std::string ident = to_identifier(subscription);
 
-    {
-        std::lock_guard lock(mutex_);
-        handlers_[ident].emplace_back(id, std::move(callback));
+    // CAS loop: build a new map, swap it in; retry if another writer raced us.
+    auto old = handlers_.load(std::memory_order_acquire);
+    auto handler = std::make_shared<Handler>(id, std::move(callback));
+    std::shared_ptr<HandlerMap> new_map;
+    do {
+        new_map = std::make_shared<HandlerMap>(*old);
+        (*new_map)[ident].push_back(handler);
+    } while (!handlers_.compare_exchange_weak(
+        old, new_map,
+        std::memory_order_release,
+        std::memory_order_acquire));
 
-        if (!connected_) {
-            pending_subs_.push_back(subscription);
-        } else {
-            nlohmann::json msg{{"method", "subscribe"}, {"subscription", subscription}};
-            std::string s = msg.dump();
-            ws_->send(s.c_str(), s.size());
-        }
-    }
+    // The WS layer buffers sends made before the connection is established,
+    // so no need to track pending subscriptions ourselves.
+    nlohmann::json msg{{"method", "subscribe"}, {"subscription", subscription}};
+    std::string s = msg.dump();
+    ws_->send(s.c_str(), s.size());
     return id;
 }
 
@@ -190,26 +213,58 @@ void WebsocketManager::unsubscribe(
     const nlohmann::json& subscription, int subscription_id)
 {
     std::string ident = to_identifier(subscription);
-    {
-        std::lock_guard lock(mutex_);
-        auto it = handlers_.find(ident);
-        if (it != handlers_.end()) {
+    HandlerPtr removed_handler;
+    bool last_handler = false;
+
+    // CAS loop: remove the entry from a fresh copy; retry on contention.
+    std::shared_ptr<const HandlerMap> old = handlers_.load(std::memory_order_acquire);
+    for (;;) {
+        auto new_map = std::make_shared<HandlerMap>(*old);
+        removed_handler.reset();
+        last_handler = false;
+
+        auto it = new_map->find(ident);
+        if (it != new_map->end()) {
             auto& vec = it->second;
             vec.erase(
                 std::remove_if(vec.begin(), vec.end(),
-                    [subscription_id](const auto& p) { return p.first == subscription_id; }),
+                    [&](const HandlerPtr& handler) {
+                        if (handler->subscription_id != subscription_id)
+                            return false;
+                        removed_handler = handler;
+                        return true;
+                    }),
                 vec.end());
             if (vec.empty()) {
-                handlers_.erase(it);
-                // Send unsubscribe only when no more handlers remain
-                if (connected_) {
-                    nlohmann::json msg{{"method", "unsubscribe"}, {"subscription", subscription}};
-                    std::string s = msg.dump();
-                    ws_->send(s.c_str(), s.size());
-                }
+                new_map->erase(it);
+                last_handler = (removed_handler != nullptr);
             }
         }
+        if (handlers_.compare_exchange_weak(
+                old, new_map,
+                std::memory_order_release,
+                std::memory_order_acquire))
+            break;
     }
+
+    if (!removed_handler)
+        return;
+
+    removed_handler->active.store(false, std::memory_order_release);
+
+    if (last_handler) {
+        nlohmann::json msg{{"method", "unsubscribe"}, {"subscription", subscription}};
+        std::string s = msg.dump();
+        ws_->send(s.c_str(), s.size());
+    }
+
+    // Self-unsubscribe from inside the callback would deadlock waiting for our
+    // own in-flight invocation to finish. Cross-callback removal remains safe:
+    // later callbacks in the same snapshot re-check `active` before invoking.
+    if (dispatching_handler == removed_handler.get())
+        return;
+
+    wait_for_zero(removed_handler->in_flight);
 }
 
 } // namespace hyperliquid
