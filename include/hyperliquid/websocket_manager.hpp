@@ -74,7 +74,7 @@ private:
     using HandlerPtr = std::shared_ptr<Handler>;
     using HandlerMap = std::unordered_map<std::string, std::vector<HandlerPtr>>;
 
-    std::atomic<std::shared_ptr<const HandlerMap>> handlers_;
+    std::shared_ptr<const HandlerMap> handlers_;
 
     std::atomic<bool> connected_{false};
     std::atomic<bool> running_{true};

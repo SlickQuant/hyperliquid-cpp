@@ -151,9 +151,10 @@ WebsocketManager::~WebsocketManager() {
     running_.store(false, std::memory_order_release);
     if (ping_thread_.joinable())
         ping_thread_.join();
-    if (ws_)
+    if (ws_) {
         ws_->reset_callbacks();
         ws_->close();
+    }
 }
 
 // Connection callbacks
@@ -178,7 +179,7 @@ void WebsocketManager::on_message(const char* data, std::size_t len) {
     if (!identifier || *identifier == "pong")
         return;
 
-    const auto handlers = handlers_.load(std::memory_order_acquire);
+    const auto handlers = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
     const auto it = handlers->find(*identifier);
     if (it == handlers->end())
         return;
@@ -240,7 +241,7 @@ int WebsocketManager::subscribe(
     const std::string identifier = to_identifier(subscription);
     const auto handler = std::make_shared<Handler>(id, std::move(callback));
 
-    auto old = handlers_.load(std::memory_order_acquire);
+    auto old = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
     std::shared_ptr<HandlerMap> new_map;
     do {
         if (is_single_subscriber_channel(identifier)) {
@@ -251,8 +252,9 @@ int WebsocketManager::subscribe(
 
         new_map = std::make_shared<HandlerMap>(*old);
         (*new_map)[identifier].push_back(handler);
-    } while (!handlers_.compare_exchange_weak(
-        old, new_map,
+    } while (!std::atomic_compare_exchange_weak_explicit(
+        &handlers_, &old,
+        std::static_pointer_cast<const HandlerMap>(new_map),
         std::memory_order_release,
         std::memory_order_acquire));
 
@@ -269,7 +271,7 @@ void WebsocketManager::unsubscribe(
     HandlerPtr removed_handler;
     bool last_handler = false;
 
-    auto old = handlers_.load(std::memory_order_acquire);
+    auto old = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
     for (;;) {
         auto new_map = std::make_shared<HandlerMap>(*old);
         removed_handler.reset();
@@ -293,8 +295,9 @@ void WebsocketManager::unsubscribe(
             }
         }
 
-        if (handlers_.compare_exchange_weak(
-                old, new_map,
+        if (std::atomic_compare_exchange_weak_explicit(
+                &handlers_, &old,
+                std::static_pointer_cast<const HandlerMap>(new_map),
                 std::memory_order_release,
                 std::memory_order_acquire))
             break;
