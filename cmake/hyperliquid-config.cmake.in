@@ -1,13 +1,13 @@
 @PACKAGE_INIT@
 
 include(CMakeFindDependencyMacro)
-include(FetchContent)
 find_dependency(nlohmann_json CONFIG)
 find_dependency(OpenSSL)
 
 find_package(slick-net 2.1.0 CONFIG QUIET)
 if (NOT slick-net_FOUND)
     message(STATUS "Fetching slick-net...")
+    include(FetchContent)
     FetchContent_Declare(
         slick-net
         GIT_REPOSITORY https://github.com/SlickQuant/slick-net.git
