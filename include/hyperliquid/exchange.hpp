@@ -21,12 +21,18 @@ namespace hyperliquid {
 // base_url: MAINNET_API_URL or TESTNET_API_URL.
 // info: shared Info instance for asset-index lookups and market data.
 // vault_address: optional sub-account / vault address; signs on behalf of it.
+// account_address: optional sub-account address; signs on behalf of it.
 class Exchange : public Api {
 public:
     Exchange(std::string private_key_hex,
              std::string_view base_url,
              std::shared_ptr<Info> info,
              std::optional<std::string> vault_address = {});
+    Exchange(std::string private_key_hex,
+             std::string_view base_url,
+             std::shared_ptr<Info> info,
+             std::optional<std::string> vault_address,
+             std::optional<std::string> account_address);
 
     // Ethereum address derived from private_key_hex.
     const std::string& wallet_address() const noexcept { return wallet_; }
@@ -75,9 +81,8 @@ public:
 
     nlohmann::json update_leverage(std::string_view coin, bool is_cross, int leverage);
 
-    // ntl: notional USD amount for isolated margin adjustment.
-    nlohmann::json update_isolated_margin(std::string_view coin, bool is_buy,
-                                           double ntl);
+    // amount: signed USD amount for isolated margin adjustment.
+    nlohmann::json update_isolated_margin(std::string_view coin, double amount);
 
     // ── Transfers (user-signed) ───────────────────────────────────────────────
 
@@ -113,23 +118,33 @@ private:
     std::string private_key_;
     std::string wallet_;
     std::optional<std::string> vault_address_;
+    std::optional<std::string> account_address_;
     std::shared_ptr<Info> info_;
     bool is_mainnet_;
 
     int asset_index(std::string_view coin);
+    std::string effective_account_address() const;
 
     // Sign an L1 action and POST to /exchange.
+    nlohmann::json post_action(nlohmann::ordered_json action);
     nlohmann::json post_action(nlohmann::ordered_json action,
-                                std::optional<std::string> vault_override = {});
+                               std::optional<std::string> signing_vault_address,
+                               std::optional<std::string> payload_vault_address);
 
     // Sign a user-signed action and POST to /exchange.
     nlohmann::json post_user_signed_action(
         nlohmann::ordered_json action,
         const std::vector<std::pair<std::string, std::string>>& payload_types,
         std::string_view primary_type);
+    nlohmann::json post_user_signed_action(
+        nlohmann::ordered_json action,
+        const std::vector<std::pair<std::string, std::string>>& payload_types,
+        std::string_view primary_type,
+        std::optional<std::string> payload_vault_address);
 
     // Apply slippage to mid-price and round to asset precision.
-    double slippage_price(std::string_view coin, bool is_buy, double slippage);
+    double slippage_price(std::string_view coin, bool is_buy, double slippage,
+                          std::optional<double> px = {});
 };
 
 } // namespace hyperliquid

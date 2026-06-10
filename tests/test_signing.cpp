@@ -62,13 +62,7 @@ TEST(FloatToWire, TrailingZerosStripped) {
 }
 
 TEST(FloatToWire, NineDecimalsRounded) {
-    // %.8f rounds; anything past 8 decimal places is truncated/rounded
-    double v = 0.123456789; // 9 significant decimal digits
-    std::string r = float_to_wire(v);
-    // Result must have at most 8 decimal digits
-    auto dot = r.find('.');
-    if (dot != std::string::npos)
-        EXPECT_LE(r.size() - dot - 1, 8u);
+    EXPECT_THROW(float_to_wire(0.123456789), std::invalid_argument);
 }
 
 TEST(FloatToWire, SmallFractionNoLeadingZeroAfterDot) {
@@ -85,6 +79,10 @@ TEST(FloatToUsdInt, OneMilli)    { EXPECT_EQ(float_to_usd_int(0.001), 1000LL);  
 TEST(FloatToUsdInt, Hundred)     { EXPECT_EQ(float_to_usd_int(100.0), 100000000LL); }
 TEST(FloatToUsdInt, FractionalCents) {
     EXPECT_EQ(float_to_usd_int(1.5), 1500000LL);
+}
+
+TEST(FloatToUsdInt, ThrowsWhenRoundingWouldBeRequired) {
+    EXPECT_THROW(float_to_usd_int(0.0000001), std::invalid_argument);
 }
 
 // ── hex_to_bytes / bytes_to_hex ───────────────────────────────────────────────

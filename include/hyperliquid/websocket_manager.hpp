@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -38,6 +39,9 @@ public:
     // Build a channel identifier string from a subscription JSON.
     // e.g. l2Book+ETH → "l2Book:ETH", candle+BTC+5m → "candle:BTC,5m"
     static std::string to_identifier(const nlohmann::json& sub);
+
+    // Build a channel identifier string from an inbound WebSocket message.
+    static std::optional<std::string> message_to_identifier(const nlohmann::json& msg);
 
     // Convert "https://..." → "wss://.../ws"
     static std::string http_to_ws_url(std::string_view http_url);

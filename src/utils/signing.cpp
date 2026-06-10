@@ -57,30 +57,48 @@ std::vector<uint8_t> hex_to_bytes(std::string_view hex) {
 
 // ── Float serialisation ───────────────────────────────────────────────────────
 
+namespace {
+
+int64_t float_to_int(double x, int power) {
+    if (!std::isfinite(x))
+        throw std::invalid_argument("float_to_int requires a finite value");
+
+    const double scaled = x * std::pow(10.0, power);
+    if (std::abs(std::round(scaled) - scaled) >= 1e-3)
+        throw std::invalid_argument("float_to_int causes rounding");
+    return static_cast<int64_t>(std::llround(scaled));
+}
+
+} // namespace
+
 std::string float_to_wire(double x) {
+    if (!std::isfinite(x))
+        throw std::invalid_argument("float_to_wire requires a finite value");
+
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.8f", x);
-    std::string s = buf;
+    std::string rounded = buf;
 
-    // Remove trailing zeros after decimal point
-    auto dot = s.find('.');
+    if (std::abs(std::stod(rounded) - x) >= 1e-12)
+        throw std::invalid_argument("float_to_wire causes rounding");
+
+    auto dot = rounded.find('.');
     if (dot != std::string::npos) {
-        auto last = s.find_last_not_of('0');
+        auto last = rounded.find_last_not_of('0');
         if (last == dot) {
-            s = s.substr(0, dot); // e.g. "1100.00000000" → "1100"
+            rounded = rounded.substr(0, dot);
         } else if (last != std::string::npos) {
-            s = s.substr(0, last + 1); // e.g. "0.20000000" → "0.2"
+            rounded = rounded.substr(0, last + 1);
         }
     }
 
-    // Normalise negative zero
-    if (s == "-0") s = "0";
-    return s;
+    if (rounded == "-0")
+        rounded = "0";
+    return rounded;
 }
 
 int64_t float_to_usd_int(double x) {
-    double scaled = x * 1e6;
-    return static_cast<int64_t>(std::round(scaled));
+    return float_to_int(x, 6);
 }
 
 // ── Wire format helpers ───────────────────────────────────────────────────────

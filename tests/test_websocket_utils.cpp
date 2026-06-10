@@ -116,24 +116,24 @@ TEST(ToIdentifier, Candle1m) {
 TEST(ToIdentifier, UserEvents) {
     EXPECT_EQ(WebsocketManager::to_identifier(
                   {{"type", "userEvents"}, {"user", "0xabc"}}),
-              "userEvents:0xabc");
+              "userEvents");
 }
 
 TEST(ToIdentifier, UserFills) {
     EXPECT_EQ(WebsocketManager::to_identifier(
-                  {{"type", "userFills"}, {"user", "0xf39fd6"}}),
+                  {{"type", "userFills"}, {"user", "0xF39FD6"}}),
               "userFills:0xf39fd6");
 }
 
 TEST(ToIdentifier, OrderUpdates) {
     EXPECT_EQ(WebsocketManager::to_identifier(
                   {{"type", "orderUpdates"}, {"user", "0xdeadbeef"}}),
-              "orderUpdates:0xdeadbeef");
+              "orderUpdates");
 }
 
 TEST(ToIdentifier, UserFundings) {
     EXPECT_EQ(WebsocketManager::to_identifier(
-                  {{"type", "userFundings"}, {"user", "0xabc123"}}),
+                  {{"type", "userFundings"}, {"user", "0xAbC123"}}),
               "userFundings:0xabc123");
 }
 
@@ -145,7 +145,7 @@ TEST(ToIdentifier, UserNonFundingLedgerUpdates) {
 
 TEST(ToIdentifier, WebData2) {
     EXPECT_EQ(WebsocketManager::to_identifier(
-                  {{"type", "webData2"}, {"user", "0xbbb"}}),
+                  {{"type", "webData2"}, {"user", "0xBbB"}}),
               "webData2:0xbbb");
 }
 
@@ -154,32 +154,70 @@ TEST(ToIdentifier, WebData2) {
 TEST(ToIdentifier, ActiveAssetData) {
     EXPECT_EQ(WebsocketManager::to_identifier(
                   {{"type", "activeAssetData"},
-                   {"coin", "ETH"}, {"user", "0xaaa"}}),
+                   {"coin", "ETH"}, {"user", "0xAaA"}}),
               "activeAssetData:ETH,0xaaa");
 }
 
-// ── to_identifier — coin values are preserved verbatim ───────────────────────
+// ── message_to_identifier — inbound routing follows Python SDK semantics ─────
 
-TEST(ToIdentifier, CoinCaseSensitive) {
-    // Identifiers must preserve the original coin string
-    EXPECT_NE(WebsocketManager::to_identifier(
-                  {{"type", "l2Book"}, {"coin", "eth"}}),
-              WebsocketManager::to_identifier(
-                  {{"type", "l2Book"}, {"coin", "ETH"}}));
+TEST(MessageToIdentifier, UserChannelMapsToUserEvents) {
+    const json msg{
+        {"channel", "user"},
+        {"data", {{"fills", json::array()}}},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "userEvents");
 }
 
-TEST(ToIdentifier, DifferentUsersDifferentIdentifiers) {
-    auto id1 = WebsocketManager::to_identifier(
-        {{"type", "userFills"}, {"user", "0x111"}});
-    auto id2 = WebsocketManager::to_identifier(
-        {{"type", "userFills"}, {"user", "0x222"}});
-    EXPECT_NE(id1, id2);
+TEST(MessageToIdentifier, TradesUsesFirstTradeCoin) {
+    const json msg{
+        {"channel", "trades"},
+        {"data", json::array({json{{"coin", "ETH"}}})},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "trades:ETH");
 }
 
-TEST(ToIdentifier, DifferentTypesDifferentIdentifiers) {
-    auto id_l2  = WebsocketManager::to_identifier(
-        {{"type", "l2Book"}, {"coin", "ETH"}});
-    auto id_bbo = WebsocketManager::to_identifier(
-        {{"type", "bbo"},    {"coin", "ETH"}});
-    EXPECT_NE(id_l2, id_bbo);
+TEST(MessageToIdentifier, TradesEmptyReturnsNullopt) {
+    const json msg{
+        {"channel", "trades"},
+        {"data", json::array()},
+    };
+    EXPECT_FALSE(WebsocketManager::message_to_identifier(msg).has_value());
+}
+
+TEST(MessageToIdentifier, CandleUsesSymbolAndInterval) {
+    const json msg{
+        {"channel", "candle"},
+        {"data", {{"s", "BTC"}, {"i", "1m"}}},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "candle:BTC,1m");
+}
+
+TEST(MessageToIdentifier, OrderUpdatesDropsUserSuffix) {
+    const json msg{
+        {"channel", "orderUpdates"},
+        {"data", {{"user", "0xabc"}}},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "orderUpdates");
+}
+
+TEST(MessageToIdentifier, ActiveSpotAssetCtxMapsToActiveAssetCtx) {
+    const json msg{
+        {"channel", "activeSpotAssetCtx"},
+        {"data", {{"coin", "@0"}}},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "activeAssetCtx:@0");
+}
+
+TEST(MessageToIdentifier, ActiveAssetDataPreservesCoinAndLowercasesUser) {
+    const json msg{
+        {"channel", "activeAssetData"},
+        {"data", {{"coin", "ETH"}, {"user", "0xABCDEF"}}},
+    };
+    ASSERT_TRUE(WebsocketManager::message_to_identifier(msg).has_value());
+    EXPECT_EQ(*WebsocketManager::message_to_identifier(msg), "activeAssetData:ETH,0xabcdef");
 }

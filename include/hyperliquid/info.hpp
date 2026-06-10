@@ -92,16 +92,33 @@ public:
 
     // ── Asset index lookup ────────────────────────────────────────────────────
 
-    // coin name → perpetual asset index (0-based). Populated on first call to meta().
+    // Canonical coin string -> asset index. Perp assets are 0-based; spot assets
+    // use 10000 + spot index to match the official Python SDK.
     std::unordered_map<std::string, int> coin_to_asset;
 
-    // Ensure coin_to_asset is populated (call before using Exchange).
+    // Human-readable name -> canonical coin string (e.g. "PURR/USDC" -> "@0").
+    std::unordered_map<std::string, std::string> name_to_coin;
+
+    // Asset index -> size decimals.
+    std::unordered_map<int, int> asset_to_sz_decimals;
+
+    // Resolve a human-readable market name or canonical coin string to the wire coin.
+    std::string canonical_coin(std::string_view coin_or_name);
+
+    // Resolve a human-readable market name or canonical coin string to an asset id.
+    int name_to_asset(std::string_view coin_or_name);
+
+    // Ensure all asset lookup maps are populated (call before using Exchange).
     void load_meta();
 
 private:
     nlohmann::json info_post(const nlohmann::json& payload);
+    void populate_perp_meta(const nlohmann::json& meta);
+    void populate_spot_meta(const nlohmann::json& spot_meta);
+    nlohmann::json remap_subscription(const nlohmann::json& subscription);
 
-    bool meta_loaded_ = false;
+    bool perp_meta_loaded_ = false;
+    bool spot_meta_loaded_ = false;
     std::unique_ptr<WebsocketManager> ws_;
 };
 

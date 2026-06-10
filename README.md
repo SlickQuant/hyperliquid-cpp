@@ -232,9 +232,10 @@ Candle `interval` values: `"1m"` `"5m"` `"15m"` `"30m"` `"1h"` `"4h"` `"8h"` `"1
 |--------|-------------|
 | `subscribe(sub_json, callback)` | Subscribe to a channel; returns `subscription_id` (positive int) |
 | `unsubscribe(sub_json, subscription_id)` | Remove one callback; double-unsubscribe is a no-op |
-| `load_meta()` | Populate `coin_to_asset` (called automatically by `Exchange`) |
+| `load_meta()` | Populate `coin_to_asset`, `name_to_coin`, and `asset_to_sz_decimals` (called automatically by `Exchange`) |
 
-`coin_to_asset` is a public `std::unordered_map<std::string, int>` mapping coin names to 0-based asset indices.
+`coin_to_asset` maps canonical wire coins to asset ids. Perps are 0-based; spot assets use `10000 + spot index`.
+`name_to_coin` maps human-readable names such as `PURR/USDC` back to canonical wire coins.
 
 ---
 
@@ -247,7 +248,8 @@ hyperliquid::Exchange exchange(
     private_key_hex,    // "0x..." or bare 64 hex chars
     base_url,           // MAINNET_API_URL or TESTNET_API_URL
     info,               // shared_ptr<Info>
-    vault_address);     // optional sub-account address
+    vault_address,      // optional sub-account address
+    account_address);   // optional account queried when using an API wallet
 ```
 
 The constructor derives `wallet_address()` from the private key and calls `info->load_meta()`.
@@ -285,7 +287,7 @@ All methods return `nlohmann::json` with the raw Hyperliquid API response.
 | Method | Description |
 |--------|-------------|
 | `update_leverage(coin, is_cross, leverage)` | Set cross or isolated leverage |
-| `update_isolated_margin(coin, is_buy, ntl)` | Add/remove USD from an isolated position |
+| `update_isolated_margin(coin, amount)` | Add/remove USD from an isolated position |
 
 ### Transfers (EIP-712 user-signed)
 

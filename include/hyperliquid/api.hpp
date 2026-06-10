@@ -16,7 +16,7 @@ public:
 
     // POST `endpoint` (e.g. "/info" or "/exchange") with `payload` as JSON body.
     // Throws std::runtime_error on HTTP 4xx/5xx.
-    nlohmann::json post(std::string_view endpoint, const nlohmann::json& payload);
+    virtual nlohmann::json post(std::string_view endpoint, const nlohmann::json& payload);
 
     struct HttpError : std::runtime_error {
         int status_code;

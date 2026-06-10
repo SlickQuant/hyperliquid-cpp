@@ -7,7 +7,7 @@
 #include <string>
 
 static constexpr const char* kDefaultKey =
-    "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 int main(int argc, char* argv[]) {
     const std::string private_key = (argc >= 2) ? argv[1] : kDefaultKey;

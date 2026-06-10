@@ -9,15 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.2] - 2026-06-09
 
+### Added
+- **`Exchange`: API-wallet account selection support** — added a constructor overload with optional `account_address` so authenticated flows can query the effective trading account separately from the signing key.
+- **`Info`: canonical asset lookup helpers** — added `name_to_coin`, `name_to_asset`, `asset_to_sz_decimals`, and `canonical_coin()` to resolve human-readable market names to Hyperliquid wire identifiers and asset ids.
+- **`WebsocketManager::message_to_identifier()`** — explicit inbound message routing helper for channel-to-handler lookup.
+- **Offline exchange parity tests** — added `tests/test_exchange.cpp` covering spot/perp mapping, payload shapes, price rounding, and effective-account selection.
+
 ### Fixed
 - **`WebsocketManager`: use-after-free / same-dispatch unsubscribe race** — callbacks now dispatch from a lock-free snapshot of shared handler state instead of copying `std::function`s under a mutex. Each callback entry carries an `active` flag and `in_flight` counter: `unsubscribe()` removes the callback from future snapshots, marks that specific callback inactive, and waits on its per-callback in-flight count with C++20 atomic wait/notify. This prevents a later callback from firing after being removed earlier in the same snapshot while still allowing self-unsubscribe without deadlocking.
+- **`updateIsolatedMargin` payload shape** — exchange requests now send the documented `ntli` field with `isBuy: true` instead of the previous mismatched parameters.
+- **`usdClassTransfer` formatting** — the signed action now uses the SDK-compatible `"amount"` string and appends `" subaccount:<address>"` when trading through a vault.
+- **Effective account selection for `market_close()`** — account state is now queried against `vault_address`, then `account_address`, then the signer wallet, matching Hyperliquid API-wallet semantics.
+- **Vault handling for user-signed transfers** — user-signed exchange payloads now include or omit `vaultAddress` consistently with the current Python SDK behavior.
+- **`basic_order.cpp` default credentials** — the example now uses the Hardhat private key instead of the Hardhat address.
 
 ### Changed
 - **`WebsocketManager`: removed `pending_subs_` pre-connection queue** — the underlying `slick::net::Websocket` already buffers outbound frames until the connection is established, making the manual pending-subscription queue redundant. `subscribe()` and `unsubscribe()` now call `ws_->send()` unconditionally; `flush_pending()`, `writer_mutex_`, and the `pending_subs_` vector are all removed.
+- **Metadata loading now matches the Hyperliquid SDK/docs** — perp assets use `meta` indices, spot assets use `10000 + spotMeta.index`, and spot aliases such as `PURR/USDC` and `@<index>` resolve to canonical wire coins.
+- **REST and WebSocket market-data requests now canonicalize coin names** before sending requests, so spot and perp subscriptions/queries use documented wire names instead of assuming perpetual-only symbols.
+- **Exchange precision handling was tightened to SDK behavior** — `float_to_wire()` and `float_to_usd_int()` now reject silent rounding, and market-order slippage pricing now applies 5 significant figures with max decimals derived from `szDecimals`.
+- **WebSocket routing was rebuilt around explicit message identifiers** — `trades`, `candle`, `activeAssetCtx`, `activeSpotAssetCtx`, `userEvents`, and `orderUpdates` now route using the actual inbound payload shape, with a 50-second heartbeat under the documented idle timeout.
+- **Internal identifier normalization is narrower** — coin-bearing websocket identifiers now preserve canonical coin casing, while address-bearing identifiers still lowercase the user/address portion for stable routing.
+- **Docs and examples were refreshed** — `README.md` now documents the expanded asset lookup maps, `account_address`, and the updated `update_isolated_margin(coin, amount)` signature.
 
 ### Tests
 - **`UnsubscribeBlocksUntilCallbackCompletes`** (integration) — regression test for the above fix; subscribes with a callback that blocks until explicitly released, calls `unsubscribe()` concurrently from a second thread, and asserts that `unsubscribe()` does not return before the in-flight callback has finished.
 - **`CallbackCanRemoveLaterCallbackFromSameDispatch`** (integration) — regression test for the snapshot hazard where callback A unsubscribes callback B on the same channel before the dispatcher reaches B in the already-loaded snapshot.
+- **Signing regressions** — added tests asserting that `float_to_wire()` and `float_to_usd_int()` throw when serialization would require rounding.
+- **WebSocket routing regressions** — extended channel-identifier tests to cover inbound routing, snapshot-safe channel naming, spot/perp active-asset messages, address normalization, and preserved coin casing.
 
 ## [0.1.1] - 2026-06-08
 

@@ -64,6 +64,7 @@ if(HYPERLIQUID_BUILD_TESTS)
         tests/test_keccak.cpp
         tests/test_types.cpp
         tests/test_signing.cpp
+        tests/test_exchange.cpp
         tests/test_websocket_utils.cpp
     )
 
