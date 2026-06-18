@@ -55,42 +55,9 @@ if(HYPERLIQUID_BUILD_EXAMPLES)
     target_link_libraries(basic_order PRIVATE hyperliquid)
 endif()
 
-# ── Unit tests ────────────────────────────────────────────────────────────────
-
 if(HYPERLIQUID_BUILD_TESTS)
-    find_package(GTest CONFIG REQUIRED)
-
-    add_executable(hyperliquid_tests
-        tests/test_keccak.cpp
-        tests/test_types.cpp
-        tests/test_signing.cpp
-        tests/test_exchange.cpp
-        tests/test_websocket_utils.cpp
-    )
-
-    target_link_libraries(hyperliquid_tests PRIVATE
-        hyperliquid
-        GTest::gtest
-        GTest::gtest_main
-    )
-
     enable_testing()
-    add_test(NAME hyperliquid_tests COMMAND hyperliquid_tests)
-
-    # ── Integration tests (require network access to testnet) ─────────────────
-
-    add_executable(hyperliquid_integration_tests
-        tests/test_info_integration.cpp
-        tests/test_websocket_integration.cpp
-    )
-
-    target_link_libraries(hyperliquid_integration_tests PRIVATE
-        hyperliquid
-        GTest::gtest
-        GTest::gtest_main
-    )
-
-    add_test(NAME hyperliquid_integration_tests COMMAND hyperliquid_integration_tests)
+    add_subdirectory(tests)
 endif()
 
 # ── Install ────────────────────────────────────────────────────────────────────

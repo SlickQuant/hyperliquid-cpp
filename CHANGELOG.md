@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [unreleased]
+
+### Changed
+- Normalize line ending to LF
+- Move test CMake setup into `tests/CMakeLists.txt`, register GoogleTest cases with `gtest_discover_tests()`, and update CI to run unit/integration test groups by CTest label.
+
 ## [0.1.2] - 2026-06-09
 
 ### Added
