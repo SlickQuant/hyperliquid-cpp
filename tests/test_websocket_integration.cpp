@@ -35,6 +35,28 @@ struct Waiter {
     }
 };
 
+struct CounterWaiter {
+    std::atomic_int count = 0;
+
+    void increment() {
+        count.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    int value() {
+        return count.load(std::memory_order_relaxed);
+    }
+
+    bool wait_greater_than(int baseline, std::chrono::seconds timeout = kMsgTimeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (value() <= baseline) {
+            if (std::chrono::steady_clock::now() >= deadline)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return true;
+    }
+};
+
 // ── Fixture ───────────────────────────────────────────────────────────────────
 // One shared Info (and therefore one WebSocket connection) for the whole suite.
 // All sync objects are heap-allocated via shared_ptr so there are no dangling
@@ -355,24 +377,24 @@ TEST_F(WsIntegration, CallbackCanRemoveLaterCallbackFromSameDispatch) {
 
 TEST_F(WsIntegration, UnsubscribeOneCallbackLeavesOther) {
     auto w1      = std::make_shared<Waiter>();
-    auto counter2 = std::make_shared<std::atomic<int>>(0);
+    auto counter2 = std::make_shared<CounterWaiter>();
     const json kSub{{"type", "allMids"}};
 
     int sid1 = info_->subscribe(kSub, [w1](const json& m) { w1->set(m); });
-    int sid2 = info_->subscribe(kSub, [counter2](const json&) { ++(*counter2); });
+    int sid2 = info_->subscribe(kSub, [counter2](const json&) { counter2->increment(); });
 
     // Wait until both have received at least one message
     ASSERT_TRUE(w1->wait()) << "Timed out before partial unsubscribe";
-    // Give sid2's callback time to fire too
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_TRUE(counter2->wait_greater_than(0)) << "sid2 did not receive before partial unsubscribe";
 
     // Remove only sid1
     info_->unsubscribe(kSub, sid1);
-    int snap = counter2->load();
+    int snap = counter2->value();
 
-    // sid2 must continue to receive messages for another second
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    EXPECT_GT(counter2->load(), snap) << "sid2 stopped receiving after sid1 was removed";
+    // sid2 must continue receiving after sid1 is removed. allMids can be quiet
+    // for short periods on testnet, so wait for the next event instead of
+    // assuming one arrives within a fixed sleep.
+    EXPECT_TRUE(counter2->wait_greater_than(snap)) << "sid2 stopped receiving after sid1 was removed";
 
     info_->unsubscribe(kSub, sid2);
 }

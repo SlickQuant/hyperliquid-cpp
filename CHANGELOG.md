@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Normalize line ending to LF
-- Move test CMake setup into `tests/CMakeLists.txt`, register GoogleTest cases with `gtest_discover_tests()`, and update CI to run unit/integration test groups by CTest label.
+- Move test CMake setup into `tests/CMakeLists.txt`, register GoogleTest cases with `gtest_discover_tests()`, and keep CI integration tests running as a single executable to avoid repeated testnet setup per discovered test case.
+- Stabilize the WebSocket partial-unsubscribe integration test by waiting for the next `allMids` event instead of assuming one arrives within a fixed one-second sleep.
 
 ## [0.1.2] - 2026-06-09
 

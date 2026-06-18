@@ -67,5 +67,10 @@ jobs:
         run: ctest --test-dir build -C Release -L unit --output-on-failure
 
       - name: Integration tests
-        run: ctest --test-dir build -C Release -L integration --output-on-failure
-        timeout-minutes: 5
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            build/tests/Release/hyperliquid_integration_tests.exe --gtest_color=yes
+          else
+            build/tests/hyperliquid_integration_tests --gtest_color=yes
+          fi
+        timeout-minutes: 10
