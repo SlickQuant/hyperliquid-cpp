@@ -17,6 +17,8 @@ target_link_libraries(hyperliquid_tests PRIVATE
 
 gtest_discover_tests(hyperliquid_tests
     TEST_PREFIX unit.
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60
     PROPERTIES
         LABELS unit
 )
@@ -34,6 +36,8 @@ target_link_libraries(hyperliquid_integration_tests PRIVATE
 
 gtest_discover_tests(hyperliquid_integration_tests
     TEST_PREFIX integration.
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 60
     PROPERTIES
         LABELS integration
 )

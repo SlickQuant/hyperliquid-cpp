@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [unreleased]
 
+### Added
+- Add a `market_data_websocket` example that subscribes to public testnet `allMids` and per-coin `l2Book` WebSocket updates for one or more coins.
+
 ### Changed
 - Normalize line ending to LF
 - Move test CMake setup into `tests/CMakeLists.txt`, register GoogleTest cases with `gtest_discover_tests()`, and keep CI integration tests running as a single executable to avoid repeated testnet setup per discovered test case.
+- Defer GoogleTest discovery to CTest with a longer discovery timeout so test executables are not run during the build.
 - Stabilize the WebSocket partial-unsubscribe integration test by waiting for the next `allMids` event instead of assuming one arrives within a fixed one-second sleep.
 
 ## [0.1.2] - 2026-06-09

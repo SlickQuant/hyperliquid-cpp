@@ -53,6 +53,9 @@ target_link_libraries(hyperliquid PUBLIC
 if(HYPERLIQUID_BUILD_EXAMPLES)
     add_executable(basic_order examples/basic_order.cpp)
     target_link_libraries(basic_order PRIVATE hyperliquid)
+
+    add_executable(market_data_websocket examples/market_data_websocket.cpp)
+    target_link_libraries(market_data_websocket PRIVATE hyperliquid)
 endif()
 
 if(HYPERLIQUID_BUILD_TESTS)
