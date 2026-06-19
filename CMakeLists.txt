@@ -56,6 +56,9 @@ if(HYPERLIQUID_BUILD_EXAMPLES)
 
     add_executable(market_data_websocket examples/market_data_websocket.cpp)
     target_link_libraries(market_data_websocket PRIVATE hyperliquid)
+
+    add_executable(market_data_websocket_per_coin examples/market_data_websocket_per_coin.cpp)
+    target_link_libraries(market_data_websocket_per_coin PRIVATE hyperliquid)
 endif()
 
 if(HYPERLIQUID_BUILD_TESTS)

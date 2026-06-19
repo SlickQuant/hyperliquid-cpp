@@ -220,14 +220,22 @@ void WebsocketManager::on_error(std::string err) {
 
 void WebsocketManager::ping_loop() {
     static constexpr auto kPingInterval = std::chrono::seconds(50);
+    static constexpr auto kShutdownCheckInterval = std::chrono::milliseconds(100);
     static const std::string ping_msg = R"({"method":"ping"})";
 
+    auto next_ping = std::chrono::steady_clock::now() + kPingInterval;
     while (running_.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(kPingInterval);
-        if (!running_.load(std::memory_order_acquire))
-            break;
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_ping) {
+            const auto remaining = next_ping - now;
+            std::this_thread::sleep_for(
+                remaining < kShutdownCheckInterval ? remaining : kShutdownCheckInterval);
+            continue;
+        }
+
         if (connected_.load(std::memory_order_acquire) && ws_)
             ws_->send(ping_msg.c_str(), ping_msg.size());
+        next_ping = std::chrono::steady_clock::now() + kPingInterval;
     }
 }
 

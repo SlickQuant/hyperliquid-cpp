@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Add a `market_data_websocket` example that subscribes to public testnet `allMids` and per-coin `l2Book` WebSocket updates for one or more coins.
+- Add a `market_data_websocket_per_coin` example that subscribes to ETH and BTC market data using one WebSocket connection per coin.
 
 ### Changed
 - Normalize line ending to LF

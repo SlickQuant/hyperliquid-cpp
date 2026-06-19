@@ -87,6 +87,8 @@ Targets produced:
 |--------|--------|
 | `hyperliquid` | Static library |
 | `basic_order` | Example executable |
+| `market_data_websocket` | Public market data WebSocket example |
+| `market_data_websocket_per_coin` | Public market data WebSocket example using one connection per coin and slick-net logging hooks |
 | `hyperliquid_tests` | Offline unit tests |
 | `hyperliquid_integration_tests` | Live testnet integration tests |
 
@@ -183,6 +185,9 @@ int sid2 = info->subscribe(
 info->unsubscribe({{"type", "l2Book"}, {"coin", "ETH"}}, sid);
 info->unsubscribe({{"type", "l2Book"}, {"coin", "ETH"}}, sid2);
 ```
+
+The WebSocket manager sends periodic pings to keep connections alive and uses
+bounded atomic shutdown checks so teardown does not wait for the full ping interval.
 
 ---
 
@@ -402,7 +407,7 @@ Each callback receives the full message object:
 
 ---
 
-## Running the Example
+## Running Examples
 
 ```bash
 # Using the hardhat test key (no real funds)
@@ -410,9 +415,19 @@ Each callback receives the full message object:
 
 # Using your own key
 ./build/Debug/basic_order 0xYOUR_PRIVATE_KEY_HEX
+
+# Subscribe to allMids and l2Book updates on one WebSocket connection
+./build/Debug/market_data_websocket ETH BTC --seconds 30
+
+# Subscribe to ETH and BTC l2Book updates using one WebSocket connection per coin
+./build/Debug/market_data_websocket_per_coin 30
 ```
 
-The example places a resting limit buy on testnet and cancels it if it is resting.
+`basic_order` places a resting limit buy on testnet and cancels it if it is resting.
+The market data examples subscribe to public testnet WebSocket feeds and print
+received updates for the requested duration.
+`market_data_websocket_per_coin` also demonstrates configuring slick-net's
+runtime logging hooks and routing `LOG_INFO` / `LOG_ERROR` output to `std::cout`.
 
 ---
 
