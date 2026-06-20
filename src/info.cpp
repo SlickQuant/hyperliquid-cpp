@@ -5,11 +5,56 @@
 
 namespace hyperliquid {
 
-Info::Info(std::string_view base_url, bool skip_ws)
+Info::Info(
+    std::string_view base_url,
+    bool skip_ws,
+    bool user_thread_dispatch,
+    uint32_t mux_record_size,
+    const char* mux_shm_name,
+    uint32_t read_buffer_size,
+    uint32_t read_control_size,
+    const char* read_buffer_shm_name,
+    uint32_t write_buffer_size
+)
     : Api(base_url)
 {
-    if (!skip_ws)
-        ws_ = std::make_unique<WebsocketManager>(base_url);
+    if (!skip_ws) {
+        ws_ = std::make_unique<WebsocketManager>(
+            base_url,
+            mux_record_size,
+            mux_shm_name,
+            read_buffer_size,
+            read_control_size,
+            read_buffer_shm_name,
+            write_buffer_size,
+            user_thread_dispatch
+        );
+    }
+}
+
+Info::Info(
+    std::string_view base_url,
+    slick::stream_buffer_multiplexer &mux,
+    bool skip_ws,
+    bool user_thread_dispatch,
+    uint32_t read_buffer_size,
+    uint32_t read_control_size,
+    const char* read_buffer_shm_name,
+    uint32_t write_buffer_size
+)
+    : Api(base_url)
+{
+    if (!skip_ws) {
+        ws_ = std::make_unique<WebsocketManager>(
+            base_url,
+            mux,
+            read_buffer_size,
+            read_control_size,
+            read_buffer_shm_name,
+            write_buffer_size,
+            user_thread_dispatch
+        );
+    }
 }
 
 // Internal helper
@@ -219,6 +264,13 @@ int Info::subscribe(const nlohmann::json& subscription,
 void Info::unsubscribe(const nlohmann::json& subscription, int subscription_id) {
     if (ws_)
         ws_->unsubscribe(remap_subscription(subscription), subscription_id);
+}
+
+bool Info::dispatch(uint32_t producer_id, const char* data, size_t length) {
+    if (ws_) {
+        return ws_->dispatch(producer_id, data, length);
+    }
+    return false;
 }
 
 } // namespace hyperliquid

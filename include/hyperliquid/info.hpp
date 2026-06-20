@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
+#include <slick/stream_buffer_multiplexer.hpp>
 
 namespace hyperliquid {
 
@@ -18,7 +19,29 @@ namespace hyperliquid {
 // Mirrors the Python SDK's Info class.
 class Info : public Api {
 public:
-    explicit Info(std::string_view base_url, bool skip_ws = false);
+    explicit Info(
+        std::string_view base_url,
+        bool skip_ws = false,
+        bool user_thread_dispatch = false,             // if true, callbacks fire on dispatch() caller thread
+        uint32_t mux_record_size = 1u << 18,           // 256K message records
+        const char* mux_shm_name = nullptr,            // default not using shared memory
+        uint32_t read_buffer_size = 1u << 24,          // 16 MB reading buffer
+        uint32_t read_control_size = 1u << 16,         // 64K control size
+        const char* read_buffer_shm_name = nullptr,    // default not using shared memory
+        uint32_t write_buffer_size = 1u << 20          // 1 MB writing buffer
+    );
+
+    explicit Info(
+        std::string_view base_url,
+        slick::stream_buffer_multiplexer &mux,
+        bool skip_ws = false,
+        bool user_thread_dispatch = false,             // if true, callbacks fire on dispatch() caller thread
+        uint32_t read_buffer_size = 1u << 24,          // 16 MB reading buffer
+        uint32_t read_control_size = 1u << 16,         // 64K control size
+        const char* read_buffer_shm_name = nullptr,    // default not using shared memory
+        uint32_t write_buffer_size = 1u << 20         // 1 MB writing buffer
+    );
+
 
     // ── Market / exchange metadata ────────────────────────────────────────────
 
@@ -89,6 +112,26 @@ public:
 
     // Unsubscribe by subscription_id from subscribe().
     void unsubscribe(const nlohmann::json& subscription, int subscription_id);
+
+    WebsocketManager* websocket() noexcept {
+        return ws_.get();
+    }
+
+    uint32_t ws_producer_id() const noexcept {
+        return ws_ ? ws_->producer_id() : WebsocketManager::INVALID_PRODUCER_ID;
+    }
+
+    // Scan at most max_count queued records and invoke callbacks for records
+    // belonging to this Info's WebSocket on the calling thread. Only meaningful
+    // when Info was constructed with user_thread_dispatch=true; otherwise
+    // returns 0.
+    size_t dispatch(std::size_t max_count = 100) {
+        return ws_ ? ws_->dispatch(max_count) : 0;
+    }
+
+    // Dispatch the message to their registered callbacks on the calling thread.
+    // Only meaningful when Info was constructed with user_thread_dispatch=true; otherwise returns false.
+    bool dispatch(uint32_t producer_id, const char* data, std::size_t length);
 
     // ── Asset index lookup ────────────────────────────────────────────────────
 

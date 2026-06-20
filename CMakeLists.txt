@@ -14,18 +14,20 @@ endif()
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-find_package(slick-net 2.1.0 CONFIG QUIET)
+find_package(slick-net 3.0.0 CONFIG QUIET)
 if (NOT slick-net_FOUND)
     message(STATUS "Fetching slick-net...")
     include(FetchContent)
+    set(BUILD_SLICK_NET_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_SLICK_NET_TESTS OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
         slick-net
         GIT_REPOSITORY https://github.com/SlickQuant/slick-net.git
-        GIT_TAG v2.1.0
+        GIT_TAG v3.0.0
     )
     FetchContent_MakeAvailable(slick-net)
 else()
-    message(STATUS "Found slick-net: ${slick-net_DIR}")
+    message(STATUS "Found slick-net ${slick-net_VERSION}: ${slick-net_DIR}")
 endif()
 
 add_library(hyperliquid STATIC
@@ -51,14 +53,7 @@ target_link_libraries(hyperliquid PUBLIC
 )
 
 if(HYPERLIQUID_BUILD_EXAMPLES)
-    add_executable(basic_order examples/basic_order.cpp)
-    target_link_libraries(basic_order PRIVATE hyperliquid)
-
-    add_executable(market_data_websocket examples/market_data_websocket.cpp)
-    target_link_libraries(market_data_websocket PRIVATE hyperliquid)
-
-    add_executable(market_data_websocket_per_coin examples/market_data_websocket_per_coin.cpp)
-    target_link_libraries(market_data_websocket_per_coin PRIVATE hyperliquid)
+    add_subdirectory(examples)
 endif()
 
 if(HYPERLIQUID_BUILD_TESTS)

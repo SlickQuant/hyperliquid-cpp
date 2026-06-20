@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,21 +13,49 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <slick/stream_buffer_multiplexer.hpp>
+#include <slick/dynamic_buffer.hpp>
 
-namespace slick::net { class Websocket; }
+namespace slick::net {
+    template<typename BufferT> class Websocket;
+}
 
 namespace hyperliquid {
+
+using Websocket = slick::net::Websocket<slick::dynamic_buffer<slick::stream_buffer_multiplexer::producer_buffer>>;
 
 // Manages a single WebSocket connection to a Hyperliquid endpoint.
 // Supports multiple subscriptions routing by channel identifier.
 // Sends periodic pings to keep the connection alive.
 class WebsocketManager {
 public:
-    explicit WebsocketManager(std::string_view http_base_url);
+    static constexpr uint32_t INVALID_PRODUCER_ID = std::numeric_limits<uint32_t>::max();
+
+    explicit WebsocketManager(
+        std::string_view http_base_url,
+        uint32_t mux_record_size = 1u << 18,           // 256K message records
+        const char* mux_shm_name = nullptr,            // default not using shared memory
+        uint32_t read_buffer_size = 1u << 24,          // 16 MB reading buffer
+        uint32_t read_control_size = 1u << 16,         // 64K control size
+        const char* read_buffer_shm_name = nullptr,    // default not using shared memory
+        uint32_t write_buffer_size = 1u << 20,         // 1 MB writing buffer
+        bool user_thread_dispatch = false              // if true, callbacks fire on dispatch() caller thread
+    );
+    explicit WebsocketManager(
+        std::string_view http_base_url,
+        slick::stream_buffer_multiplexer &mux,
+        uint32_t read_buffer_size = 1u << 24,          // 16 MB reading buffer
+        uint32_t read_control_size = 1u << 16,         // 64K control size
+        const char* read_buffer_shm_name = nullptr,    // default not using shared memory
+        uint32_t write_buffer_size = 1u << 20,         // 1 MB writing buffer
+        bool user_thread_dispatch = false              // if true, callbacks fire on dispatch() caller thread
+    );
     ~WebsocketManager();
 
     WebsocketManager(const WebsocketManager&) = delete;
     WebsocketManager& operator=(const WebsocketManager&) = delete;
+    WebsocketManager(WebsocketManager&&) = delete;
+    WebsocketManager& operator=(WebsocketManager&&) = delete;
 
     // Subscribe to a channel. Returns a subscription_id for later unsubscribe.
     // `subscription` follows the Python SDK format: {"type": "l2Book", "coin": "ETH"}, etc.
@@ -46,8 +75,39 @@ public:
     // Convert "https://..." → "wss://.../ws"
     static std::string http_to_ws_url(std::string_view http_url);
 
-private:
+    slick::stream_buffer_multiplexer& mux() noexcept {
+        return mux_;
+    }
 
+    uint32_t producer_id() const noexcept {
+        return producer_id_;
+    }
+
+    bool user_thread_dispatch() const noexcept {
+        return user_thread_dispatch_;
+    }
+
+    // Scan at most max_count queued records and invoke callbacks for records
+    // belonging to this WebsocketManager on the calling thread. Only meaningful
+    // when constructed with user_thread_dispatch=true; calling it in
+    // service-thread mode is a no-op.
+    // Returns the number of messages dispatched to this manager's callbacks.
+    size_t dispatch(std::size_t max_count);
+
+    // Dispatch a message to their registered callbacks on the calling thread
+    // Only meaningful when the WebsocketManager was constructed with user_thread_dispatch=true
+    // calling it in service-thread mode is a no-op.
+    // Return true if message dispatched
+    bool dispatch(uint32_t producer_id, const char* data, std::size_t length);
+
+private:
+    void init(
+        uint32_t read_buffer_size,
+        uint32_t read_control_size,
+        const char* read_buffer_shm_name,
+        uint32_t write_buffer_size
+    );
+    void dispatch_message(const char* data, std::size_t len);
     void on_connected();
     void on_disconnected();
     void on_message(const char* data, std::size_t len);
@@ -56,7 +116,10 @@ private:
     void ping_loop();        // runs in ping_thread_
 
     std::string ws_url_;
-    std::unique_ptr<slick::net::Websocket> ws_;
+    std::unique_ptr<Websocket> ws_;
+
+    std::unique_ptr<slick::stream_buffer_multiplexer> owning_mux_;
+    slick::stream_buffer_multiplexer &mux_;
 
     // Handler snapshots are published with copy-on-write. Each snapshot holds
     // shared per-callback state so unsubscribe() can deactivate exactly one
@@ -81,6 +144,9 @@ private:
     std::atomic<int>  next_id_{1};
 
     std::thread ping_thread_;
+    uint32_t producer_id_ = INVALID_PRODUCER_ID;
+    bool user_thread_dispatch_ = false;
+    uint64_t consumer_cursor_ = 0;
 };
 
 } // namespace hyperliquid

@@ -132,29 +132,75 @@ std::optional<std::string> WebsocketManager::message_to_identifier(const nlohman
 
 // Constructor / destructor
 
-WebsocketManager::WebsocketManager(std::string_view http_base_url)
+WebsocketManager::WebsocketManager(
+    std::string_view http_base_url,
+    uint32_t mux_record_size,
+    const char* mux_shm_name,
+    uint32_t read_buffer_size,
+    uint32_t read_control_size,
+    const char* read_buffer_shm_name,
+    uint32_t write_buffer_size,
+    bool user_thread_dispatch
+)
     : ws_url_(http_to_ws_url(http_base_url))
+    , owning_mux_(new slick::stream_buffer_multiplexer(mux_record_size, mux_shm_name))
+    , mux_(*owning_mux_.get())
     , handlers_(std::make_shared<HandlerMap>())
+    , user_thread_dispatch_(user_thread_dispatch)
 {
-    ws_ = std::make_unique<slick::net::Websocket>(
-        ws_url_,
-        [this]() { on_connected(); },
-        [this]() { on_disconnected(); },
-        [this](const char* data, std::size_t len) { on_message(data, len); },
-        [this](std::string&& err) { on_error(std::move(err)); });
+    init(read_buffer_size, read_control_size, read_buffer_shm_name, write_buffer_size);
+}
 
-    ws_->open();
-    ping_thread_ = std::thread([this]() { ping_loop(); });
+WebsocketManager::WebsocketManager(
+    std::string_view http_base_url,
+    slick::stream_buffer_multiplexer &mux,
+    uint32_t read_buffer_size,
+    uint32_t read_control_size,
+    const char* read_buffer_shm_name,
+    uint32_t write_buffer_size,
+    bool user_thread_dispatch
+)
+    : ws_url_(http_to_ws_url(http_base_url))
+    , mux_(mux)
+    , handlers_(std::make_shared<HandlerMap>())
+    , user_thread_dispatch_(user_thread_dispatch)
+{
+    init(read_buffer_size, read_control_size, read_buffer_shm_name, write_buffer_size);
 }
 
 WebsocketManager::~WebsocketManager() {
     running_.store(false, std::memory_order_release);
-    if (ping_thread_.joinable())
+    if (ping_thread_.joinable()) {
         ping_thread_.join();
+    }
     if (ws_) {
-        ws_->reset_callbacks();
+        ws_->detach();
         ws_->close();
     }
+}
+
+void WebsocketManager::init(
+    uint32_t read_buffer_size,
+    uint32_t read_control_size,
+    const char* read_buffer_shm_name,
+    uint32_t write_buffer_size
+) {
+    producer_id_ = mux_.producer_count();
+    auto pd = mux_.add_producer(producer_id_, read_buffer_size, read_control_size, read_buffer_shm_name);
+    if (user_thread_dispatch_)
+        consumer_cursor_ = mux_.initial_reading_index();
+    ws_ = std::make_unique<Websocket>(
+        ws_url_,
+        [this]() { on_connected(); },
+        [this]() { on_disconnected(); },
+        [this](const char* data, std::size_t len) { on_message(data, len); },
+        [this](std::string&& err) { on_error(std::move(err)); },
+        pd,
+        write_buffer_size
+    );
+
+    ws_->open();
+    ping_thread_ = std::thread([this]() { ping_loop(); });
 }
 
 // Connection callbacks
@@ -168,6 +214,12 @@ void WebsocketManager::on_disconnected() {
 }
 
 void WebsocketManager::on_message(const char* data, std::size_t len) {
+    if (user_thread_dispatch_)
+        return;
+    dispatch_message(data, len);
+}
+
+void WebsocketManager::dispatch_message(const char* data, std::size_t len) {
     nlohmann::json msg;
     try {
         msg = nlohmann::json::parse(data, data + len);
@@ -210,6 +262,33 @@ void WebsocketManager::on_message(const char* data, std::size_t len) {
         if (handler->in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
             handler->in_flight.notify_all();
     }
+}
+
+size_t WebsocketManager::dispatch(std::size_t max_count) {
+    if (!user_thread_dispatch_)
+        return 0;
+    size_t scanned = 0;
+    size_t dispatched = 0;
+    while (scanned < max_count) {
+        auto rec = mux_.read(consumer_cursor_);
+        if (!rec) {
+            break;
+        }
+        ++scanned;
+        if (rec.producer_id != producer_id_) {
+            continue;
+        }
+        dispatch_message(reinterpret_cast<const char*>(rec.data), rec.length);
+        ++dispatched;
+    }
+    return dispatched;
+}
+
+bool WebsocketManager::dispatch(uint32_t producer_id, const char* data, std::size_t length) {
+    if (!user_thread_dispatch_ || producer_id != producer_id_)
+        return false;
+    dispatch_message(data, length);
+    return true;
 }
 
 void WebsocketManager::on_error(std::string err) {

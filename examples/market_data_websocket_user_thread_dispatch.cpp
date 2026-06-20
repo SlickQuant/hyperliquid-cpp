@@ -1,5 +1,5 @@
-// WebSocket market data example: subscribe to public testnet updates.
-// Usage: market_data_websocket [coin ...] [--seconds N]
+// WebSocket market data example: dispatch callbacks on the caller thread.
+// Usage: market_data_websocket_user_thread_dispatch [coin ...] [--seconds N]
 // Defaults: coins=ETH, seconds=30
 
 #include <hyperliquid/hyperliquid.hpp>
@@ -16,12 +16,6 @@
 #include <vector>
 
 namespace {
-
-static constexpr const char* SHM_MUX_QUEUE_NAME = "mux_queue";
-static constexpr const char* SHM_MD_BUF_NAME    = "md_buf";
-static constexpr uint32_t mux_record_size = 1 << 20;
-static constexpr uint32_t read_buffer_size = 1 << 24;
-static constexpr uint32_t read_control_size = 1 << 16;
 
 struct Options {
     std::vector<std::string> coins{"ETH"};
@@ -101,20 +95,11 @@ int main(int argc, char* argv[]) {
         options = parse_options(argc, argv);
     } catch (const std::exception& ex) {
         std::cerr << "Invalid arguments: " << ex.what() << "\n"
-                  << "Usage: market_data_websocket [coin ...] [--seconds N]\n";
+                  << "Usage: market_data_websocket_user_thread_dispatch [coin ...] [--seconds N]\n";
         return 1;
     }
 
-    hyperliquid::Info info(
-        hyperliquid::TESTNET_API_URL,
-        /*skip_ws=*/false,
-        /*user_thread_dispatch*/false,
-        mux_record_size,
-        SHM_MUX_QUEUE_NAME,
-        read_buffer_size,
-        read_control_size,
-        SHM_MD_BUF_NAME
-    );
+    hyperliquid::Info info(hyperliquid::TESTNET_API_URL, /*skip_ws=*/false, /*user_thread_dispatch*/true);
 
     std::mutex cout_mutex;
     std::atomic<int> all_mids_updates{0};
@@ -161,7 +146,12 @@ int main(int argc, char* argv[]) {
         std::cout << " market data on testnet for " << options.seconds << " seconds...\n";
     }
 
-    std::this_thread::sleep_for(std::chrono::seconds(options.seconds));
+    auto stop_time = std::chrono::steady_clock::now() + std::chrono::seconds(options.seconds);
+    while (std::chrono::steady_clock::now() < stop_time) {
+        if (!info.dispatch()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
 
     info.unsubscribe(all_mids_sub, all_mids_id);
     for (const auto& [subscription, id] : l2_book_subscriptions)

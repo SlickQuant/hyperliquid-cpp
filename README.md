@@ -26,6 +26,8 @@ All authenticated actions are signed locally using EIP-712 / secp256k1; your pri
 - Read-only market data (`Info`): universe metadata, mid prices, order books, candles, funding history, account state
 - Authenticated trading (`Exchange`): limit/market/trigger orders, bulk ops, cancel, modify, leverage, margin, USD/spot transfers, bridge withdrawal
 - Real-time WebSocket subscriptions via `Info::subscribe` with multi-callback fan-out per channel
+- Optional caller-thread WebSocket dispatch via `Info::dispatch()` for applications that own their event loop
+- Optional shared-memory WebSocket buffers backed by `slick::stream_buffer_multiplexer`
 - Native EIP-712 signing for both L1 actions (orders, leverage) and user-signed actions (transfers) using OpenSSL secp256k1
 - `nlohmann::ordered_json` + msgpack action hashing — byte-for-byte compatible with the Python SDK signing output
 - Embedded Keccak-256 (Ethereum's pre-FIPS variant — distinct from OpenSSL's SHA3-256)
@@ -58,7 +60,7 @@ cd vcpkg
 vcpkg install nlohmann-json openssl gtest
 ```
 
-`slick-net` is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
+`slick-net` 3.0.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
 
 ```bash
 vcpkg install slick-net
@@ -88,7 +90,10 @@ Targets produced:
 | `hyperliquid` | Static library |
 | `basic_order` | Example executable |
 | `market_data_websocket` | Public market data WebSocket example |
+| `market_data_websocket_user_thread_dispatch` | Public market data WebSocket example that dispatches callbacks on the caller thread |
 | `market_data_websocket_per_coin` | Public market data WebSocket example using one connection per coin and slick-net logging hooks |
+| `market_data_websocket_per_coin_user_thread_dispatch` | Per-coin WebSocket example using a shared dispatch multiplexer and slick-net logging hooks |
+| `market_data_websocket_shm_reader` | Shared-memory reader for records published by `market_data_websocket` |
 | `hyperliquid_tests` | Offline unit tests |
 | `hyperliquid_integration_tests` | Live testnet integration tests |
 
@@ -189,6 +194,25 @@ info->unsubscribe({{"type", "l2Book"}, {"coin", "ETH"}}, sid2);
 The WebSocket manager sends periodic pings to keep connections alive and uses
 bounded atomic shutdown checks so teardown does not wait for the full ping interval.
 
+For applications that need callbacks on their own thread, enable caller-thread dispatch
+and poll queued WebSocket records:
+
+```cpp
+hyperliquid::Info info(
+    hyperliquid::TESTNET_API_URL,
+    /*skip_ws=*/false,
+    /*user_thread_dispatch=*/true);
+
+info.subscribe({{"type", "allMids"}}, [](const nlohmann::json& msg) {
+    std::cout << msg.dump() << "\n";
+});
+
+while (running) {
+    info.dispatch();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+```
+
 ---
 
 ## API Reference — Info
@@ -196,10 +220,31 @@ bounded atomic shutdown checks so teardown does not wait for the full ping inter
 Construct with:
 
 ```cpp
-hyperliquid::Info info(base_url, skip_ws = false);
+hyperliquid::Info info(
+    base_url,
+    skip_ws = false,
+    user_thread_dispatch = false,
+    mux_record_size = 1u << 18,
+    mux_shm_name = nullptr,
+    read_buffer_size = 1u << 24,
+    read_control_size = 1u << 16,
+    read_buffer_shm_name = nullptr,
+    write_buffer_size = 1u << 20);
+
+hyperliquid::Info info_with_mux(
+    base_url,
+    mux,
+    skip_ws = false,
+    user_thread_dispatch = false,
+    read_buffer_size = 1u << 24,
+    read_control_size = 1u << 16,
+    read_buffer_shm_name = nullptr,
+    write_buffer_size = 1u << 20);
 ```
 
 Setting `skip_ws = true` disables the WebSocket connection (REST-only mode, lower overhead).
+Setting `user_thread_dispatch = true` queues inbound WebSocket records in the slick stream-buffer multiplexer; call `dispatch()` to invoke matching callbacks on the caller thread.
+The multiplexer parameters can name shared-memory segments, and the external `mux` overload lets multiple `Info` instances share one dispatch queue.
 
 ### Market data
 
@@ -237,6 +282,10 @@ Candle `interval` values: `"1m"` `"5m"` `"15m"` `"30m"` `"1h"` `"4h"` `"8h"` `"1
 |--------|-------------|
 | `subscribe(sub_json, callback)` | Subscribe to a channel; returns `subscription_id` (positive int) |
 | `unsubscribe(sub_json, subscription_id)` | Remove one callback; double-unsubscribe is a no-op |
+| `websocket()` | Return the underlying `WebsocketManager*`, or `nullptr` when WebSocket support is disabled |
+| `ws_producer_id()` | Return this WebSocket's stream-buffer producer id, or `INVALID_PRODUCER_ID` when unavailable |
+| `dispatch(max_count=100)` | Scan queued records and invoke this `Info` instance's callbacks on the caller thread |
+| `dispatch(producer_id, data, length)` | Dispatch one queued message for this `Info` instance's producer id |
 | `load_meta()` | Populate `coin_to_asset`, `name_to_coin`, and `asset_to_sz_decimals` (called automatically by `Exchange`) |
 
 `coin_to_asset` maps canonical wire coins to asset ids. Perps are 0-based; spot assets use `10000 + spot index`.
@@ -419,8 +468,20 @@ Each callback receives the full message object:
 # Subscribe to allMids and l2Book updates on one WebSocket connection
 ./build/Debug/market_data_websocket ETH BTC --seconds 30
 
+# Same subscriptions, but callbacks are dispatched by the caller thread
+./build/Debug/market_data_websocket_user_thread_dispatch ETH BTC --seconds 30
+
 # Subscribe to ETH and BTC l2Book updates using one WebSocket connection per coin
 ./build/Debug/market_data_websocket_per_coin 30
+
+# Per-coin connections sharing one dispatch multiplexer
+./build/Debug/market_data_websocket_per_coin_user_thread_dispatch 30
+
+# Terminal 1: publish WebSocket records to named shared-memory segments
+./build/Debug/market_data_websocket ETH BTC --seconds 30
+
+# Terminal 2: read records from the same shared-memory segments
+./build/Debug/market_data_websocket_shm_reader --seconds 30
 ```
 
 `basic_order` places a resting limit buy on testnet and cancels it if it is resting.
@@ -428,6 +489,12 @@ The market data examples subscribe to public testnet WebSocket feeds and print
 received updates for the requested duration.
 `market_data_websocket_per_coin` also demonstrates configuring slick-net's
 runtime logging hooks and routing `LOG_INFO` / `LOG_ERROR` output to `std::cout`.
+`market_data_websocket_per_coin_user_thread_dispatch` demonstrates the same
+slick-net logging hooks while dispatching one feed on the caller thread through
+a shared `slick::stream_buffer_multiplexer`.
+`market_data_websocket` publishes records to the `mux_queue` and `md_buf`
+shared-memory segments so `market_data_websocket_shm_reader` can attach from a
+separate process.
 
 ---
 
@@ -440,7 +507,7 @@ cmake --build build --config Debug --target hyperliquid_tests
 ctest --test-dir build -C Debug -R hyperliquid_tests -V
 ```
 
-Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, and channel identifier generation.
+Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, channel identifier generation, caller-thread WebSocket dispatch routing, and shared-memory stream-buffer attachment.
 
 ### Integration tests (requires testnet)
 

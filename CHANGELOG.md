@@ -12,12 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Add a `market_data_websocket` example that subscribes to public testnet `allMids` and per-coin `l2Book` WebSocket updates for one or more coins.
 - Add a `market_data_websocket_per_coin` example that subscribes to ETH and BTC market data using one WebSocket connection per coin.
+- Add user-thread WebSocket dispatch support through `Info::dispatch()`, `WebsocketManager::dispatch()`, and `user_thread_dispatch` constructor options.
+- Add `Info` and `WebsocketManager` constructors that accept an external `slick::stream_buffer_multiplexer` for shared dispatch queues.
+- Add `market_data_websocket_user_thread_dispatch`, `market_data_websocket_per_coin_user_thread_dispatch`, and `market_data_websocket_shm_reader` examples.
+- Add shared-memory WebSocket buffer configuration options so external readers can attach to the market-data stream.
 
 ### Changed
 - Normalize line ending to LF
+- Update the WebSocket transport integration for `slick-net` 3.0.0 and the slick dynamic-buffer stream-buffer-multiplexer backend.
+- Move example target registration into `examples/CMakeLists.txt`.
+- Publish `market_data_websocket` records to named shared-memory segments that `market_data_websocket_shm_reader` can open.
 - Move test CMake setup into `tests/CMakeLists.txt`, register GoogleTest cases with `gtest_discover_tests()`, and keep CI integration tests running as a single executable to avoid repeated testnet setup per discovered test case.
 - Defer GoogleTest discovery to CTest with a longer discovery timeout so test executables are not run during the build.
 - Stabilize the WebSocket partial-unsubscribe integration test by waiting for the next `allMids` event instead of assuming one arrives within a fixed one-second sleep.
+
+### Tests
+- Add offline regression tests for user-thread WebSocket dispatch routing, foreign producer filtering, and shared-memory writer/reader attachment.
 
 ## [0.1.2] - 2026-06-09
 
