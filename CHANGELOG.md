@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [unreleased]
+## [0.2.0] -2026-06-19
 
 ### Added
 - Add a `market_data_websocket` example that subscribes to public testnet `allMids` and per-coin `l2Book` WebSocket updates for one or more coins.
