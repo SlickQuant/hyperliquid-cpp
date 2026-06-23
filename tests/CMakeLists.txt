@@ -8,6 +8,7 @@ add_executable(hyperliquid_tests
     test_exchange.cpp
     test_websocket_utils.cpp
     test_websocket_dispatch.cpp
+    test_websocket_reconnect.cpp
 )
 
 target_link_libraries(hyperliquid_tests PRIVATE

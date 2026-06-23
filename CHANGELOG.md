@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.1] - 2026-06-23
+
+### Added
+- Add automatic `WebsocketManager` reconnect attempts with bounded exponential backoff after disconnects or transport errors.
+- Replay active WebSocket subscriptions after reconnect so `Info::subscribe()` callbacks resume without manual re-subscription.
+
+### Fixed
+- Keep WebSocket subscription replay lock-free and synchronized with unsubscribe by tracking per-identifier subscription state, in-flight subscribe/replay sends, and final unsubscribe phases with atomics.
+- Avoid stale server-side subscriptions when a reconnect replay overlaps with the last local `unsubscribe()` for a channel.
+- Coalesce multiple callbacks on the same channel into one wire subscription until the last callback unsubscribes.
+
+### Tests
+- Add offline `SubscriptionTracking` tests covering subscribe while disconnected, callback routing after unsubscribe, concurrent subscribe/unsubscribe, wire subscription coalescing, and unsubscribe-before-resubscribe ordering using a local in-process WebSocket server.
+
 ## [0.2.0] -2026-06-19
 
 ### Added

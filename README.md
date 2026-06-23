@@ -25,7 +25,7 @@ All authenticated actions are signed locally using EIP-712 / secp256k1; your pri
 
 - Read-only market data (`Info`): universe metadata, mid prices, order books, candles, funding history, account state
 - Authenticated trading (`Exchange`): limit/market/trigger orders, bulk ops, cancel, modify, leverage, margin, USD/spot transfers, bridge withdrawal
-- Real-time WebSocket subscriptions via `Info::subscribe` with multi-callback fan-out per channel
+- Real-time WebSocket subscriptions via `Info::subscribe` with multi-callback fan-out, automatic reconnect, and active-subscription replay
 - Optional caller-thread WebSocket dispatch via `Info::dispatch()` for applications that own their event loop
 - Optional shared-memory WebSocket buffers backed by `slick::stream_buffer_multiplexer`
 - Native EIP-712 signing for both L1 actions (orders, leverage) and user-signed actions (transfers) using OpenSSL secp256k1
@@ -191,8 +191,10 @@ info->unsubscribe({{"type", "l2Book"}, {"coin", "ETH"}}, sid);
 info->unsubscribe({{"type", "l2Book"}, {"coin", "ETH"}}, sid2);
 ```
 
-The WebSocket manager sends periodic pings to keep connections alive and uses
-bounded atomic shutdown checks so teardown does not wait for the full ping interval.
+The WebSocket manager sends periodic pings, reconnects with bounded exponential
+backoff after disconnects or transport errors, and replays active subscriptions
+after reconnect. Multiple callbacks on the same channel share one server-side
+subscription until the last callback unsubscribes.
 
 For applications that need callbacks on their own thread, enable caller-thread dispatch
 and poll queued WebSocket records:
@@ -507,7 +509,7 @@ cmake --build build --config Debug --target hyperliquid_tests
 ctest --test-dir build -C Debug -R hyperliquid_tests -V
 ```
 
-Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, channel identifier generation, caller-thread WebSocket dispatch routing, and shared-memory stream-buffer attachment.
+Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, channel identifier generation, caller-thread WebSocket dispatch routing, lock-free reconnect subscription tracking, and shared-memory stream-buffer attachment.
 
 ### Integration tests (requires testnet)
 

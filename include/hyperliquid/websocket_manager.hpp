@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -101,6 +102,9 @@ public:
     bool dispatch(uint32_t producer_id, const char* data, std::size_t length);
 
 private:
+    struct SubscriptionState;
+    using SubscriptionStatePtr = std::shared_ptr<SubscriptionState>;
+
     void init(
         uint32_t read_buffer_size,
         uint32_t read_control_size,
@@ -112,8 +116,16 @@ private:
     void on_disconnected();
     void on_message(const char* data, std::size_t len);
     void on_error(std::string err);
+    void resubscribe_all();  // re-sends all subscribe messages; called from on_connected()
+    void send_subscribe_if_active(const SubscriptionStatePtr& state);
+    void activate_subscription(const SubscriptionStatePtr& state);
+    void deactivate_subscription(const SubscriptionStatePtr& state,
+                                 const nlohmann::json& subscription);
+    SubscriptionStatePtr subscription_state_for(
+        const std::string& identifier,
+        const nlohmann::json& subscription);
 
-    void ping_loop();        // runs in ping_thread_
+    void ping_loop();        // runs in ping_thread_; also manages reconnection
 
     std::string ws_url_;
     std::unique_ptr<Websocket> ws_;
@@ -121,23 +133,55 @@ private:
     std::unique_ptr<slick::stream_buffer_multiplexer> owning_mux_;
     slick::stream_buffer_multiplexer &mux_;
 
+    enum class SubscriptionPhase : std::uint8_t {
+        Inactive,
+        Active,
+        Unsubscribing,
+    };
+
+    // Per-identifier state is shared by all callbacks for that subscription.
+    // It serializes reconnect replay and final unsubscribe with atomics only:
+    // final unsubscribe waits for in-flight subscribe/replay sends before
+    // sending the server-side unsubscribe.
+    struct SubscriptionState {
+        std::shared_ptr<const nlohmann::json> subscription;
+        std::atomic<unsigned int> handler_count{0};
+        std::atomic<unsigned int> send_in_flight{0};
+        std::atomic<SubscriptionPhase> phase{SubscriptionPhase::Inactive};
+
+        explicit SubscriptionState(const nlohmann::json& sub)
+            : subscription(std::make_shared<const nlohmann::json>(sub)) {}
+    };
+
+    using SubStateMap = std::unordered_map<std::string, SubscriptionStatePtr>;
+
     // Handler snapshots are published with copy-on-write. Each snapshot holds
     // shared per-callback state so unsubscribe() can deactivate exactly one
     // callback and wait for only that callback's in-flight invocation to drain.
     struct Handler {
         int subscription_id;
         std::function<void(const nlohmann::json&)> callback;
+        SubscriptionStatePtr subscription_state;
         std::atomic<bool> active{true};
         std::atomic<unsigned int> in_flight{0};
 
-        Handler(int id, std::function<void(const nlohmann::json&)> cb)
-            : subscription_id(id), callback(std::move(cb)) {}
+        Handler(int id,
+                std::function<void(const nlohmann::json&)> cb,
+                SubscriptionStatePtr state)
+            : subscription_id(id)
+            , callback(std::move(cb))
+            , subscription_state(std::move(state)) {}
     };
 
     using HandlerPtr = std::shared_ptr<Handler>;
     using HandlerMap = std::unordered_map<std::string, std::vector<HandlerPtr>>;
 
     std::shared_ptr<const HandlerMap> handlers_;
+
+    // Subscription states keyed by identifier, used to re-subscribe after reconnect.
+    // States may remain as inactive tombstones so a new subscribe can safely
+    // synchronize with a concurrent final unsubscribe for the same identifier.
+    std::shared_ptr<const SubStateMap> sub_state_map_{std::make_shared<SubStateMap>()};
 
     std::atomic<bool> connected_{false};
     std::atomic<bool> running_{true};

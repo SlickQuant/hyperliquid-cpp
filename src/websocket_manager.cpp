@@ -4,11 +4,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <slick/net/websocket.hpp>
+#include <slick/net/logging.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <iostream>
 #include <thread>
 
 namespace {
@@ -207,6 +207,148 @@ void WebsocketManager::init(
 
 void WebsocketManager::on_connected() {
     connected_.store(true, std::memory_order_release);
+    resubscribe_all();
+}
+
+void WebsocketManager::resubscribe_all() {
+    const auto snap = std::atomic_load_explicit(&sub_state_map_, std::memory_order_acquire);
+    for (const auto& [identifier, state] : *snap) {
+        (void)identifier;
+        send_subscribe_if_active(state);
+    }
+}
+
+void WebsocketManager::send_subscribe_if_active(const SubscriptionStatePtr& state) {
+    state->send_in_flight.fetch_add(1, std::memory_order_acq_rel);
+
+    auto release_send = [&]() noexcept {
+        if (state->send_in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            state->send_in_flight.notify_all();
+    };
+
+    try {
+        if (state->handler_count.load(std::memory_order_acquire) != 0 &&
+            state->phase.load(std::memory_order_acquire) == SubscriptionPhase::Active &&
+            connected_.load(std::memory_order_acquire)) {
+            const auto sub = std::atomic_load_explicit(&state->subscription,
+                                                       std::memory_order_acquire);
+            nlohmann::json msg{{"method", "subscribe"}, {"subscription", *sub}};
+            const std::string serialized = msg.dump();
+            ws_->send(serialized.c_str(), serialized.size());
+        }
+    } catch (...) {
+        release_send();
+        throw;
+    }
+
+    release_send();
+}
+
+void WebsocketManager::activate_subscription(const SubscriptionStatePtr& state) {
+    bool should_send = false;
+
+    for (;;) {
+        if (state->handler_count.load(std::memory_order_acquire) == 0)
+            return;
+
+        auto phase = state->phase.load(std::memory_order_acquire);
+        if (phase == SubscriptionPhase::Active)
+            return;
+
+        if (phase == SubscriptionPhase::Inactive) {
+            if (state->phase.compare_exchange_weak(
+                    phase,
+                    SubscriptionPhase::Active,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                state->phase.notify_all();
+                should_send = true;
+                break;
+            }
+            continue;
+        }
+
+        state->phase.wait(phase, std::memory_order_relaxed);
+    }
+
+    if (should_send)
+        send_subscribe_if_active(state);
+}
+
+void WebsocketManager::deactivate_subscription(const SubscriptionStatePtr& state,
+                                               const nlohmann::json& subscription) {
+    for (;;) {
+        if (state->handler_count.load(std::memory_order_acquire) != 0)
+            return;
+
+        auto phase = state->phase.load(std::memory_order_acquire);
+        if (phase == SubscriptionPhase::Inactive)
+            return;
+
+        if (phase == SubscriptionPhase::Active) {
+            if (state->phase.compare_exchange_weak(
+                    phase,
+                    SubscriptionPhase::Unsubscribing,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire))
+                break;
+            continue;
+        }
+
+        state->phase.wait(phase, std::memory_order_relaxed);
+    }
+
+    wait_for_zero(state->send_in_flight);
+
+    if (state->handler_count.load(std::memory_order_acquire) != 0) {
+        state->phase.store(SubscriptionPhase::Active, std::memory_order_release);
+        state->phase.notify_all();
+        return;
+    }
+
+    try {
+        if (connected_.load(std::memory_order_acquire)) {
+            nlohmann::json msg{{"method", "unsubscribe"}, {"subscription", subscription}};
+            const std::string serialized = msg.dump();
+            ws_->send(serialized.c_str(), serialized.size());
+        }
+    } catch (...) {
+        state->phase.store(SubscriptionPhase::Inactive, std::memory_order_release);
+        state->phase.notify_all();
+        throw;
+    }
+
+    state->phase.store(SubscriptionPhase::Inactive, std::memory_order_release);
+    state->phase.notify_all();
+}
+
+WebsocketManager::SubscriptionStatePtr WebsocketManager::subscription_state_for(
+    const std::string& identifier,
+    const nlohmann::json& subscription)
+{
+    auto old = std::atomic_load_explicit(&sub_state_map_, std::memory_order_acquire);
+    for (;;) {
+        const auto it = old->find(identifier);
+        if (it != old->end()) {
+            std::atomic_store_explicit(
+                &it->second->subscription,
+                std::make_shared<const nlohmann::json>(subscription),
+                std::memory_order_release);
+            return it->second;
+        }
+
+        auto state = std::make_shared<SubscriptionState>(subscription);
+        auto new_map = std::make_shared<SubStateMap>(*old);
+        new_map->emplace(identifier, state);
+
+        if (std::atomic_compare_exchange_weak_explicit(
+                &sub_state_map_,
+                &old,
+                std::static_pointer_cast<const SubStateMap>(new_map),
+                std::memory_order_release,
+                std::memory_order_acquire))
+            return state;
+    }
 }
 
 void WebsocketManager::on_disconnected() {
@@ -292,29 +434,69 @@ bool WebsocketManager::dispatch(uint32_t producer_id, const char* data, std::siz
 }
 
 void WebsocketManager::on_error(std::string err) {
-    std::cerr << "[WebsocketManager] error: " << err << "\n";
+    LOG_ERROR("[WebsocketManager] error: {}", err);
+    ws_->close();
 }
 
-// Ping loop
+// Ping loop / reconnect manager
 
 void WebsocketManager::ping_loop() {
-    static constexpr auto kPingInterval = std::chrono::seconds(50);
-    static constexpr auto kShutdownCheckInterval = std::chrono::milliseconds(100);
-    static const std::string ping_msg = R"({"method":"ping"})";
+    static constexpr auto kPingInterval        = std::chrono::seconds(50);
+    static constexpr auto kCheckInterval       = std::chrono::milliseconds(100);
+    static constexpr auto kInitialRetryDelay   = std::chrono::seconds(1);
+    static constexpr auto kMaxRetryDelay       = std::chrono::seconds(30);
+    static const std::string ping_msg          = R"({"method":"ping"})";
 
-    auto next_ping = std::chrono::steady_clock::now() + kPingInterval;
+    auto next_ping    = std::chrono::steady_clock::now() + kPingInterval;
+    auto retry_delay  = kInitialRetryDelay;
+    bool reconnect_scheduled = false;
+    std::chrono::steady_clock::time_point reconnect_at;
+    bool was_connected = false;
+
     while (running_.load(std::memory_order_acquire)) {
-        const auto now = std::chrono::steady_clock::now();
-        if (now < next_ping) {
-            const auto remaining = next_ping - now;
-            std::this_thread::sleep_for(
-                remaining < kShutdownCheckInterval ? remaining : kShutdownCheckInterval);
+        std::this_thread::sleep_for(kCheckInterval);
+        if (!running_.load(std::memory_order_acquire))
+            break;
+
+        const auto now          = std::chrono::steady_clock::now();
+        const bool is_connected = connected_.load(std::memory_order_acquire);
+
+        if (is_connected) {
+            if (!was_connected) {
+                // Just (re)connected — reset backoff
+                retry_delay          = kInitialRetryDelay;
+                reconnect_scheduled  = false;
+                was_connected        = true;
+            }
+            if (now >= next_ping) {
+                ws_->send(ping_msg.c_str(), ping_msg.size());
+                next_ping = now + kPingInterval;
+            }
             continue;
         }
 
-        if (connected_.load(std::memory_order_acquire) && ws_)
-            ws_->send(ping_msg.c_str(), ping_msg.size());
-        next_ping = std::chrono::steady_clock::now() + kPingInterval;
+        was_connected = false;
+
+        // Wait until the socket is fully DISCONNECTED before attempting open(),
+        // so we don't interrupt an in-progress connection attempt.
+        if (!ws_ || ws_->status() != Websocket::Status::DISCONNECTED)
+            continue;
+
+        if (!reconnect_scheduled) {
+            reconnect_scheduled = true;
+            reconnect_at        = now + retry_delay;
+            LOG_INFO("[WebsocketManager] disconnected — reconnecting in {}ms",
+                     std::chrono::duration_cast<std::chrono::milliseconds>(retry_delay).count());
+            retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
+            continue;
+        }
+
+        if (now >= reconnect_at) {
+            LOG_INFO("[WebsocketManager] reconnecting...");
+            reconnect_scheduled = false;
+            ws_->open();
+            next_ping = now + kPingInterval;
+        }
     }
 }
 
@@ -326,28 +508,35 @@ int WebsocketManager::subscribe(
 {
     const int id = next_id_.fetch_add(1);
     const std::string identifier = to_identifier(subscription);
-    const auto handler = std::make_shared<Handler>(id, std::move(callback));
+    const auto state = subscription_state_for(identifier, subscription);
+    const auto handler = std::make_shared<Handler>(id, std::move(callback), state);
 
-    auto old = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
-    std::shared_ptr<HandlerMap> new_map;
-    do {
-        if (is_single_subscriber_channel(identifier)) {
-            const auto existing = old->find(identifier);
-            if (existing != old->end() && !existing->second.empty())
-                throw std::runtime_error("Channel does not support multiple subscriptions: " + identifier);
-        }
+    state->handler_count.fetch_add(1, std::memory_order_acq_rel);
 
-        new_map = std::make_shared<HandlerMap>(*old);
-        (*new_map)[identifier].push_back(handler);
-    } while (!std::atomic_compare_exchange_weak_explicit(
-        &handlers_, &old,
-        std::static_pointer_cast<const HandlerMap>(new_map),
-        std::memory_order_release,
-        std::memory_order_acquire));
+    try {
+        auto old = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
+        std::shared_ptr<HandlerMap> new_map;
+        do {
+            if (is_single_subscriber_channel(identifier)) {
+                const auto existing = old->find(identifier);
+                if (existing != old->end() && !existing->second.empty())
+                    throw std::runtime_error("Channel does not support multiple subscriptions: " + identifier);
+            }
 
-    nlohmann::json msg{{"method", "subscribe"}, {"subscription", subscription}};
-    const std::string serialized = msg.dump();
-    ws_->send(serialized.c_str(), serialized.size());
+            new_map = std::make_shared<HandlerMap>(*old);
+            (*new_map)[identifier].push_back(handler);
+        } while (!std::atomic_compare_exchange_weak_explicit(
+            &handlers_, &old,
+            std::static_pointer_cast<const HandlerMap>(new_map),
+            std::memory_order_release,
+            std::memory_order_acquire));
+    } catch (...) {
+        if (state->handler_count.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            deactivate_subscription(state, subscription);
+        throw;
+    }
+
+    activate_subscription(state);
     return id;
 }
 
@@ -356,13 +545,11 @@ void WebsocketManager::unsubscribe(
 {
     const std::string identifier = to_identifier(subscription);
     HandlerPtr removed_handler;
-    bool last_handler = false;
 
     auto old = std::atomic_load_explicit(&handlers_, std::memory_order_acquire);
     for (;;) {
         auto new_map = std::make_shared<HandlerMap>(*old);
         removed_handler.reset();
-        last_handler = false;
 
         const auto it = new_map->find(identifier);
         if (it != new_map->end()) {
@@ -378,7 +565,6 @@ void WebsocketManager::unsubscribe(
                 handlers.end());
             if (handlers.empty()) {
                 new_map->erase(it);
-                last_handler = (removed_handler != nullptr);
             }
         }
 
@@ -395,11 +581,9 @@ void WebsocketManager::unsubscribe(
 
     removed_handler->active.store(false, std::memory_order_release);
 
-    if (last_handler) {
-        nlohmann::json msg{{"method", "unsubscribe"}, {"subscription", subscription}};
-        const std::string serialized = msg.dump();
-        ws_->send(serialized.c_str(), serialized.size());
-    }
+    const auto state = removed_handler->subscription_state;
+    if (state->handler_count.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        deactivate_subscription(state, subscription);
 
     if (dispatching_handler == removed_handler.get())
         return;
