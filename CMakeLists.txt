@@ -12,7 +12,7 @@ if(WIN32)
 endif()
 
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(OpenSSL REQUIRED)
+find_package(OpenSSL CONFIG REQUIRED)
 
 find_package(slick-net 3.0.0 CONFIG QUIET)
 if (NOT slick-net_FOUND)
