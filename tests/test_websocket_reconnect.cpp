@@ -31,17 +31,18 @@ public:
     RecordingWebsocketServer()
         : acceptor_(ioc_, tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), 0))
         , port_(acceptor_.local_endpoint().port())
-        , accept_thread_([this] { accept_loop(); })
-    {}
+    {
+        start_accept();
+        io_thread_ = std::thread([this] { ioc_.run(); });
+    }
 
     ~RecordingWebsocketServer() {
         stop_.store(true, std::memory_order_release);
 
-        boost::system::error_code ec;
-        acceptor_.close(ec);
+        ioc_.stop();
 
-        if (accept_thread_.joinable())
-            accept_thread_.join();
+        if (io_thread_.joinable())
+            io_thread_.join();
 
         for (auto& session : sessions_) {
             if (session.joinable())
@@ -66,17 +67,17 @@ public:
     }
 
 private:
-    void accept_loop() {
-        while (!stop_.load(std::memory_order_acquire)) {
-            boost::system::error_code ec;
-            tcp::socket socket(ioc_);
-            acceptor_.accept(socket, ec);
-            if (ec)
-                break;
-            sessions_.emplace_back([this, socket = std::move(socket)]() mutable {
-                session_loop(std::move(socket));
-            });
-        }
+    void start_accept() {
+        acceptor_.async_accept([this](boost::system::error_code ec, tcp::socket socket) {
+            if (!ec && !stop_.load(std::memory_order_acquire)) {
+                sessions_.emplace_back([this, socket = std::move(socket)]() mutable {
+                    session_loop(std::move(socket));
+                });
+            }
+
+            if (!stop_.load(std::memory_order_acquire) && acceptor_.is_open())
+                start_accept();
+        });
     }
 
     void session_loop(tcp::socket socket) {
@@ -104,7 +105,7 @@ private:
     tcp::acceptor acceptor_;
     unsigned short port_;
     std::atomic_bool stop_{false};
-    std::thread accept_thread_;
+    std::thread io_thread_;
     std::vector<std::thread> sessions_;
 
     mutable std::mutex messages_mutex_;
