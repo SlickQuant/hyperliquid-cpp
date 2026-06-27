@@ -469,7 +469,7 @@ void WebsocketManager::ping_loop() {
                 was_connected        = true;
             }
             if (now >= next_ping) {
-                ws_->send(ping_msg.c_str(), ping_msg.size());
+                ws_->send(ping_msg.c_str(), ping_msg.size(), false, false);
                 next_ping = now + kPingInterval;
             }
             continue;
