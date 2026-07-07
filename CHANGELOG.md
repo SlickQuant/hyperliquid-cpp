@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [0.3.0] - 2026-07-07
 
 ### Added
 - `hyperliquid::decode_l2_diff(std::string_view)` — decodes the compact `data.c` binary payload from Hyperliquid's undocumented `l2` WebSocket channel into a `nlohmann::json` diff object. The payload is standard base64 → raw deflate; decoding uses `EVP_DecodeBlock` (OpenSSL, already linked) and zlib `inflate`.
