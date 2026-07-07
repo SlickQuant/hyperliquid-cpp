@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `market_data_websocket` example now connects to `MAINNET_API_URL` instead of `TESTNET_API_URL`.
 - Suppress ping message logging
 
+### Fixed
+- Duplicate wire subscribe when `subscribe()` races connection establishment: the subscriber thread and the `on_connected()` replay could both send the subscribe message. Wire sends are now gated by a lock-free connection-epoch CAS so exactly one send occurs per subscription per connection; the final unsubscribe releases the claim so a re-subscribe on the same connection sends again.
+
 ### Tests
 - `L2DiffDecoder.DecodesCompressedDiffPayload` — round-trip decode of a captured mainnet `l2` channel payload; asserts coin, timestamp, bid/ask levels, and removed-level arrays.
 - `L2DiffDecoder.RejectsInvalidBase64` — invalid base64 characters throw `std::invalid_argument`.

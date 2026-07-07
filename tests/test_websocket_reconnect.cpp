@@ -293,6 +293,32 @@ TEST(SubscriptionTracking, ResubscribeAfterFinalUnsubscribeSendsUnsubscribeBefor
     mgr.unsubscribe(sub, sid);
 }
 
+// ── subscribe racing the initial connect sends exactly one wire subscribe ─────
+// Regression: subscribe() overlapping on_connected() used to double-send the
+// wire subscribe — once from the subscriber thread and once from the
+// resubscribe_all() replay. The duplicate broke wire-order assertions and
+// would surface as "Already subscribed" errors against the real API.
+
+TEST(SubscriptionTracking, SubscribeRacingConnectSendsExactlyOneWireSubscribe) {
+    for (int i = 0; i < 5; ++i) {
+        RecordingWebsocketServer server;
+        slick::stream_buffer_multiplexer mux(16);
+        const std::string base_url = server.base_url();
+        WebsocketManager mgr(base_url, mux, 4096, 16, nullptr, 1024, /*user_thread_dispatch=*/true);
+
+        // Subscribe immediately so the call races connection establishment.
+        const nlohmann::json sub{{"type", "allMids"}};
+        const int sid = mgr.subscribe(sub, [](const nlohmann::json&) {});
+
+        ASSERT_TRUE(server.wait_for_message_count(1, std::chrono::seconds(5)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        EXPECT_EQ(count_method(server.messages(), "subscribe"), 1u) << "iteration " << i;
+
+        mgr.unsubscribe(sub, sid);
+    }
+}
+
 // ── concurrent subscribe/unsubscribe — COW must not race ─────────────────────
 // Two threads subscribe to distinct channels simultaneously; no crash = no data
 // race. Run under TSAN for the strongest guarantee.

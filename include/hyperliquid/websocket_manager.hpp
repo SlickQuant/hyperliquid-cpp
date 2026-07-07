@@ -149,6 +149,12 @@ private:
         std::atomic<unsigned int> handler_count{0};
         std::atomic<unsigned int> send_in_flight{0};
         std::atomic<SubscriptionPhase> phase{SubscriptionPhase::Inactive};
+        // Connection epoch this subscription was last sent for. Gates the wire
+        // subscribe to exactly-once per connection: subscribe() and the
+        // on_connected() replay can race, and only the CAS winner sends.
+        // Reset to 0 by the final unsubscribe so a re-subscribe on the same
+        // connection sends again.
+        std::atomic<uint64_t> subscribed_epoch{0};
 
         explicit SubscriptionState(const nlohmann::json& sub)
             : subscription(std::make_shared<const nlohmann::json>(sub)) {}
@@ -187,6 +193,9 @@ private:
     std::atomic<bool> connected_{false};
     std::atomic<bool> running_{true};
     std::atomic<int>  next_id_{1};
+    // Incremented on every successful (re)connect, before connected_ flips
+    // true, so any thread that observes connected_ also observes the epoch.
+    std::atomic<uint64_t> connection_epoch_{0};
 
     std::thread ping_thread_;
     uint32_t producer_id_ = INVALID_PRODUCER_ID;

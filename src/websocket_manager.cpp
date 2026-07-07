@@ -206,6 +206,7 @@ void WebsocketManager::init(
 // Connection callbacks
 
 void WebsocketManager::on_connected() {
+    connection_epoch_.fetch_add(1, std::memory_order_acq_rel);
     connected_.store(true, std::memory_order_release);
     resubscribe_all();
 }
@@ -230,13 +231,34 @@ void WebsocketManager::send_subscribe_if_active(const SubscriptionStatePtr& stat
         if (state->handler_count.load(std::memory_order_acquire) != 0 &&
             state->phase.load(std::memory_order_acquire) == SubscriptionPhase::Active &&
             connected_.load(std::memory_order_acquire)) {
-            const auto sub = std::atomic_load_explicit(&state->subscription,
-                                                       std::memory_order_acquire);
-            nlohmann::json msg{{"method", "subscribe"}, {"subscription", *sub}};
-            const std::string serialized = msg.dump();
-            ws_->send(serialized.c_str(), serialized.size());
+            // subscribe() and the on_connected() replay can both reach this
+            // point for the same state; the epoch CAS lets exactly one of
+            // them send per connection.
+            const uint64_t epoch = connection_epoch_.load(std::memory_order_acquire);
+            uint64_t sent = state->subscribed_epoch.load(std::memory_order_acquire);
+            bool won = false;
+            while (sent < epoch) {
+                if (state->subscribed_epoch.compare_exchange_weak(
+                        sent, epoch,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    won = true;
+                    break;
+                }
+            }
+
+            if (won) {
+                const auto sub = std::atomic_load_explicit(&state->subscription,
+                                                           std::memory_order_acquire);
+                nlohmann::json msg{{"method", "subscribe"}, {"subscription", *sub}};
+                const std::string serialized = msg.dump();
+                ws_->send(serialized.c_str(), serialized.size());
+            }
         }
     } catch (...) {
+        // The send failed after claiming the epoch; release the claim so a
+        // later attempt (or the reconnect replay) can send.
+        state->subscribed_epoch.store(0, std::memory_order_release);
         release_send();
         throw;
     }
@@ -313,11 +335,15 @@ void WebsocketManager::deactivate_subscription(const SubscriptionStatePtr& state
             ws_->send(serialized.c_str(), serialized.size());
         }
     } catch (...) {
+        state->subscribed_epoch.store(0, std::memory_order_release);
         state->phase.store(SubscriptionPhase::Inactive, std::memory_order_release);
         state->phase.notify_all();
         throw;
     }
 
+    // Release the epoch claim before publishing Inactive so a re-subscribe on
+    // the same connection sends a fresh wire subscribe.
+    state->subscribed_epoch.store(0, std::memory_order_release);
     state->phase.store(SubscriptionPhase::Inactive, std::memory_order_release);
     state->phase.notify_all();
 }
