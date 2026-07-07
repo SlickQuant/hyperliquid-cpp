@@ -44,6 +44,7 @@ using OrderType = std::variant<LimitOrderType, TriggerOrderType>;
 
 class Cloid {
 public:
+    // Throws std::invalid_argument if raw is not "0x" followed by exactly 32 hex chars.
     explicit Cloid(std::string raw) : raw_(std::move(raw)) { validate(); }
 
     static Cloid from_int(uint64_t v) {
@@ -53,6 +54,7 @@ public:
         return Cloid{buf};
     }
 
+    // Throws std::invalid_argument if s is not "0x" followed by exactly 32 hex chars.
     static Cloid from_str(std::string_view s) {
         return Cloid{std::string(s)};
     }

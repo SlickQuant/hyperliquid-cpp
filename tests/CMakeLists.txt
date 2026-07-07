@@ -5,6 +5,7 @@ add_executable(hyperliquid_tests
     test_keccak.cpp
     test_types.cpp
     test_signing.cpp
+    test_l2_diff.cpp
     test_exchange.cpp
     test_websocket_utils.cpp
     test_websocket_dispatch.cpp

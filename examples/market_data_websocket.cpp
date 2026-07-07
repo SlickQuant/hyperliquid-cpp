@@ -1,4 +1,4 @@
-// WebSocket market data example: subscribe to public testnet updates.
+// WebSocket market data example: subscribe to public mainnet updates.
 // Usage: market_data_websocket [coin ...] [--seconds N]
 // Defaults: coins=ETH, seconds=30
 
@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
     }
 
     hyperliquid::Info info(
-        hyperliquid::TESTNET_API_URL,
+        hyperliquid::MAINNET_API_URL,
         /*skip_ws=*/false,
         /*user_thread_dispatch*/false,
         mux_record_size,
@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Listening for";
         for (const auto& coin : options.coins)
             std::cout << " " << coin;
-        std::cout << " market data on testnet for " << options.seconds << " seconds...\n";
+        std::cout << " market data on mainnet for " << options.seconds << " seconds...\n";
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(options.seconds));

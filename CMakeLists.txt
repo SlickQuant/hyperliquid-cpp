@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(hyperliquid-cpp VERSION 0.2.1 LANGUAGES CXX)
+project(hyperliquid-cpp VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,6 +13,7 @@ endif()
 
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
 
 find_package(slick-net 3.0.0 CONFIG QUIET)
 if (NOT slick-net_FOUND)
@@ -35,6 +36,7 @@ add_library(hyperliquid STATIC
     src/info.cpp
     src/exchange.cpp
     src/websocket_manager.cpp
+    src/utils/l2_diff.cpp
     src/utils/signing.cpp
 )
 
@@ -49,6 +51,7 @@ target_link_libraries(hyperliquid PUBLIC
     nlohmann_json::nlohmann_json
     OpenSSL::SSL
     OpenSSL::Crypto
+    ZLIB::ZLIB
     slick::net
 )
 

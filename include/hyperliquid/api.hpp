@@ -15,7 +15,8 @@ public:
     virtual ~Api() = default;
 
     // POST `endpoint` (e.g. "/info" or "/exchange") with `payload` as JSON body.
-    // Throws std::runtime_error on HTTP 4xx/5xx.
+    // Throws Api::HttpError on HTTP 4xx/5xx.
+    // Throws std::runtime_error on network failure or malformed JSON response.
     virtual nlohmann::json post(std::string_view endpoint, const nlohmann::json& payload);
 
     struct HttpError : std::runtime_error {

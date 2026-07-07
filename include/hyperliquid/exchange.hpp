@@ -22,12 +22,18 @@ namespace hyperliquid {
 // info: shared Info instance for asset-index lookups and market data.
 // vault_address: optional sub-account / vault address; signs on behalf of it.
 // account_address: optional sub-account address; signs on behalf of it.
+//
+// All trading methods throw Api::HttpError on HTTP 4xx/5xx, std::runtime_error
+// on network or signing failure, and std::invalid_argument on non-finite or
+// unrepresentable price/size values (propagated from float_to_wire).
 class Exchange : public Api {
 public:
+    // Throws std::runtime_error if private_key_hex is not a valid secp256k1 key.
     Exchange(std::string private_key_hex,
              std::string_view base_url,
              std::shared_ptr<Info> info,
              std::optional<std::string> vault_address = {});
+    // Throws std::runtime_error if private_key_hex is not a valid secp256k1 key.
     Exchange(std::string private_key_hex,
              std::string_view base_url,
              std::shared_ptr<Info> info,
@@ -57,6 +63,7 @@ public:
                                 std::optional<Cloid> cloid = {});
 
     // Close current position at mid-price +/- slippage. Queries user_state for sz.
+    // Throws std::runtime_error if there is no open position for coin.
     nlohmann::json market_close(std::string_view coin,
                                  std::optional<double> sz = {},
                                  double slippage = 0.05,

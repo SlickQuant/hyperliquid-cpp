@@ -60,6 +60,7 @@ public:
 
     // Subscribe to a channel. Returns a subscription_id for later unsubscribe.
     // `subscription` follows the Python SDK format: {"type": "l2Book", "coin": "ETH"}, etc.
+    // Throws std::runtime_error if the channel does not support multiple simultaneous subscriptions.
     int subscribe(const nlohmann::json& subscription,
                   std::function<void(const nlohmann::json&)> callback);
 

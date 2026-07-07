@@ -17,15 +17,18 @@ namespace hyperliquid::signing {
 // ── Float serialisation (mirrors Python's float_to_wire) ─────────────────────
 // Formats to up to 8 decimal places, strips trailing zeros.
 // "1100.0" → "1100", "0.2" → "0.2"
+// Throws std::invalid_argument if x is non-finite or serialisation would require rounding.
 std::string float_to_wire(double x);
 
-// USD amounts: multiply by 1e6 and round to integer
+// USD amounts: multiply by 1e6 and round to integer.
+// Throws std::invalid_argument if x is non-finite or conversion requires rounding.
 int64_t float_to_usd_int(double x);
 
 // ── Wire-format helpers ───────────────────────────────────────────────────────
 
 // Convert an OrderRequest to the compact wire JSON object {a,b,p,s,r,t,?c}.
 // Uses nlohmann::ordered_json to preserve key insertion order for msgpack hashing.
+// Throws std::invalid_argument (propagated from float_to_wire) on non-finite or unrepresentable prices/sizes.
 nlohmann::ordered_json order_request_to_wire(const OrderRequest& req, int asset);
 
 // Build the "order" action {type, orders, grouping, ?builder}.
@@ -37,6 +40,7 @@ nlohmann::ordered_json order_wires_to_action(
 // ── Action hashing ────────────────────────────────────────────────────────────
 // Reproduces Python's action_hash():
 //   keccak256( msgpack(action) || nonce_be8 || vault_flag || [vault_bytes] || [expires_flag_be8] )
+// Throws std::invalid_argument if vault_address is present but not exactly 20 hex-decoded bytes.
 std::array<uint8_t, 32> action_hash(
     const nlohmann::ordered_json& action,
     const std::optional<std::string>& vault_address,
@@ -47,6 +51,8 @@ std::array<uint8_t, 32> action_hash(
 
 // Sign an L1 action (order/cancel/leverage/margin/…) using the phantom-agent
 // EIP-712 pattern with Exchange domain (chainId 1337).
+// Throws std::runtime_error on invalid private key or OpenSSL failure.
+// Throws std::invalid_argument if vault_address is malformed (propagated from action_hash).
 Signature sign_l1_action(
     std::string_view private_key_hex,
     const nlohmann::ordered_json& action,
@@ -59,6 +65,7 @@ Signature sign_l1_action(
 // with domain "HyperliquidSignTransaction" and chainId 0x66eee.
 // `action` is modified in-place to add signatureChainId and hyperliquidChain.
 // `payload_types` is a list of {field_name, solidity_type} pairs.
+// Throws std::runtime_error on invalid private key or OpenSSL failure.
 Signature sign_user_signed_action(
     std::string_view private_key_hex,
     nlohmann::ordered_json& action,
@@ -69,6 +76,7 @@ Signature sign_user_signed_action(
 // ── Key utilities ─────────────────────────────────────────────────────────────
 
 // Derive Ethereum address (checksummed lower-case "0x...") from secp256k1 private key hex.
+// Throws std::runtime_error on invalid key or OpenSSL failure.
 std::string private_key_to_address(std::string_view private_key_hex);
 
 // Current timestamp in milliseconds since UNIX epoch.
@@ -76,6 +84,7 @@ int64_t get_timestamp_ms();
 
 // Hex helpers
 std::string bytes_to_hex(const uint8_t* data, size_t len, bool prefix = true);
+// Throws std::invalid_argument if hex has odd length.
 std::vector<uint8_t> hex_to_bytes(std::string_view hex);
 
 } // namespace hyperliquid::signing

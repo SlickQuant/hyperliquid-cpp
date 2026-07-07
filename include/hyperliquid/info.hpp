@@ -17,6 +17,8 @@ namespace hyperliquid {
 
 // Read-only Hyperliquid API client.
 // Mirrors the Python SDK's Info class.
+// All REST methods throw Api::HttpError on HTTP 4xx/5xx and std::runtime_error
+// on network failure or malformed JSON response.
 class Info : public Api {
 public:
     explicit Info(
@@ -107,6 +109,8 @@ public:
     // Use the same JSON format as the Python SDK:
     //   {"type": "l2Book", "coin": "ETH"}
     //   {"type": "userFills", "user": "0x..."}
+    // Throws std::runtime_error if the WebSocket was not started (skip_ws=true).
+    // Throws std::runtime_error if the channel does not support multiple subscriptions.
     int subscribe(const nlohmann::json& subscription,
                   std::function<void(const nlohmann::json&)> callback);
 
@@ -149,9 +153,11 @@ public:
     std::string canonical_coin(std::string_view coin_or_name);
 
     // Resolve a human-readable market name or canonical coin string to an asset id.
+    // Throws std::invalid_argument if the coin is not found in the loaded metadata.
     int name_to_asset(std::string_view coin_or_name);
 
     // Ensure all asset lookup maps are populated (call before using Exchange).
+    // Throws Api::HttpError or std::runtime_error on network/HTTP failure.
     void load_meta();
 
 private:

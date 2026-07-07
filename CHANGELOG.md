@@ -9,8 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `hyperliquid::decode_l2_diff(std::string_view)` — decodes the compact `data.c` binary payload from Hyperliquid's undocumented `l2` WebSocket channel into a `nlohmann::json` diff object. The payload is standard base64 → raw deflate; decoding uses `EVP_DecodeBlock` (OpenSSL, already linked) and zlib `inflate`.
+- ZLIB added as an explicit CMake dependency (`find_package(ZLIB REQUIRED)` / `ZLIB::ZLIB`); propagated to installed consumers via `find_dependency(ZLIB)` in `hyperliquid-config.cmake`.
+
 ### Changed
+- `market_data_websocket` example now connects to `MAINNET_API_URL` instead of `TESTNET_API_URL`.
 - Suppress ping message logging
+
+### Tests
+- `L2DiffDecoder.DecodesCompressedDiffPayload` — round-trip decode of a captured mainnet `l2` channel payload; asserts coin, timestamp, bid/ask levels, and removed-level arrays.
+- `L2DiffDecoder.RejectsInvalidBase64` — invalid base64 characters throw `std::invalid_argument`.
+- `L2DiffDecoder.RejectsInvalidDeflateData` — valid base64 that is not raw deflate throws `std::runtime_error`.
+- `L2DiffDecoder.RejectsNonJsonDeflatePayload` — valid raw deflate that decompresses to non-JSON throws `std::runtime_error`.
 
 ## [0.2.1] - 2026-06-23
 
