@@ -54,7 +54,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          "$VCPKG_ROOT/vcpkg" install nlohmann-json openssl gtest slick-net
+          "$VCPKG_ROOT/vcpkg" install nlohmann-json openssl zlib gtest slick-net
       - name: Configure
         run: |
           cmake -S . -B build \
