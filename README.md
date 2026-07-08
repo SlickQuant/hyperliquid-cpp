@@ -26,6 +26,7 @@ All authenticated actions are signed locally using EIP-712 / secp256k1; your pri
 - Read-only market data (`Info`): universe metadata, mid prices, order books, candles, funding history, account state
 - Authenticated trading (`Exchange`): limit/market/trigger orders, bulk ops, cancel, modify, leverage, margin, USD/spot transfers, bridge withdrawal
 - Real-time WebSocket subscriptions via `Info::subscribe` with multi-callback fan-out, automatic reconnect, and active-subscription replay
+- `decode_l2_diff()` helper for the undocumented compressed `l2` order-book diff channel (base64 + raw deflate → JSON)
 - Optional caller-thread WebSocket dispatch via `Info::dispatch()` for applications that own their event loop
 - Optional shared-memory WebSocket buffers backed by `slick::stream_buffer_multiplexer`
 - Native EIP-712 signing for both L1 actions (orders, leverage) and user-signed actions (transfers) using OpenSSL secp256k1
@@ -57,7 +58,7 @@ cd vcpkg
 ### Installing required packages
 
 ```bash
-vcpkg install nlohmann-json openssl gtest
+vcpkg install nlohmann-json openssl zlib gtest
 ```
 
 `slick-net` 3.0.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
@@ -455,6 +456,36 @@ Each callback receives the full message object:
   }
 }
 ```
+
+### Undocumented `l2` diff channel
+
+The Hyperliquid web app uses a compact `l2` channel that streams order-book
+*diffs* instead of full `l2Book` snapshots. It is not part of the documented
+API and may change without notice. Messages carry the diff as a compressed
+blob in `data.c` (standard base64 → raw deflate → JSON); use
+`hyperliquid::decode_l2_diff()` to unpack it:
+
+```cpp
+info->subscribe(
+    {{"type", "l2"}, {"coin", "ETH"}},
+    [](const nlohmann::json& msg) {
+        const auto diff = hyperliquid::decode_l2_diff(
+            msg.at("data").at("c").get<std::string>());
+        // diff:
+        // {
+        //   "c": "@142",           // canonical wire coin
+        //   "t": 1783010021673,    // timestamp (ms)
+        //   "l": [ [ {"p": "61231.0", "s": "0.30076"}, ... ],   // bid updates
+        //          [ {"p": "61232.0", "s": "0.08123"}, ... ] ], // ask updates
+        //   "r": [ [...], [...] ]  // removed levels per side
+        // }
+    });
+```
+
+`decode_l2_diff` throws `std::invalid_argument` on malformed base64 or an
+empty payload, and `std::runtime_error` if the blob is not valid raw deflate
+or does not decompress to valid JSON. Decoding requires zlib, which is linked
+by the SDK automatically.
 
 ---
 
