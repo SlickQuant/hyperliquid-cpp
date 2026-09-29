@@ -14,6 +14,7 @@
 using hyperliquid::Exchange;
 using hyperliquid::Info;
 using hyperliquid::LOCAL_API_URL;
+using hyperliquid::MAINNET_API_URL;
 using hyperliquid::TESTNET_API_URL;
 using json = nlohmann::json;
 
@@ -185,6 +186,18 @@ TEST(ExchangePayloads, UserSignedTransfersIncludeVaultAddress) {
     ASSERT_EQ(exchange.last_endpoint, "/exchange");
     EXPECT_EQ(exchange.last_payload["vaultAddress"].get<std::string>(), kVaultAddress);
     EXPECT_EQ(exchange.last_payload["action"]["amount"].get<std::string>(), "1.0");
+}
+
+TEST(ExchangeNetwork, MainnetUrlWithTrailingSlashSignsForMainnet) {
+    auto info = std::make_shared<MockInfo>();
+    // Api strips the slash for requests; signing must use the same URL, or
+    // mainnet requests go out labelled "Testnet" and are rejected.
+    MockExchange exchange(kTestKey, std::string(MAINNET_API_URL) + "//", info);
+
+    exchange.usd_transfer(1.0, kDestination);
+
+    ASSERT_EQ(exchange.last_endpoint, "/exchange");
+    EXPECT_EQ(exchange.last_payload["action"]["hyperliquidChain"].get<std::string>(), "Mainnet");
 }
 
 TEST(ExchangePricing, MarketOpenRoundsSpotPriceUsingSdkRules) {

@@ -14,6 +14,20 @@
 namespace {
 
 thread_local const void* dispatching_handler = nullptr;
+// Gate of the socket callback running on this thread, so a manager destroyed
+// from inside its own callback does not wait for that callback to drain.
+thread_local const void* entered_gate = nullptr;
+
+// Call from a catch(...) block only.
+void log_current_exception(std::string_view context) {
+    try {
+        throw;
+    } catch (const std::exception& e) {
+        LOG_ERROR("[WebsocketManager] {} threw: {}", context, e.what());
+    } catch (...) {
+        LOG_ERROR("[WebsocketManager] {} threw an unknown exception", context);
+    }
+}
 
 void wait_for_zero(std::atomic<unsigned int>& counter) {
     unsigned int in_flight = counter.load(std::memory_order_acquire);
@@ -130,6 +144,55 @@ std::optional<std::string> WebsocketManager::message_to_identifier(const nlohman
     return channel;
 }
 
+// Socket callback gate
+
+struct WebsocketManager::CallbackGate {
+    static constexpr uint32_t kClosed = 1u << 31;
+
+    // Low bits: callbacks in flight. kClosed: the manager is being destroyed.
+    std::atomic<uint32_t> state{0};
+
+    bool enter() noexcept {
+        if ((state.fetch_add(1, std::memory_order_acq_rel) & kClosed) == 0)
+            return true;
+        leave();
+        return false;
+    }
+
+    void leave() noexcept {
+        // Only a closing gate has a waiter, so the hot path never notifies.
+        if (state.fetch_sub(1, std::memory_order_acq_rel) & kClosed)
+            state.notify_all();
+    }
+
+    // Rejects new callbacks and waits until only `self_held` (the callbacks
+    // entered by the calling thread) remain in flight.
+    void close_and_drain(uint32_t self_held) noexcept {
+        uint32_t current = state.fetch_or(kClosed, std::memory_order_acq_rel) | kClosed;
+        while (current != (kClosed | self_held)) {
+            state.wait(current, std::memory_order_acquire);
+            current = state.load(std::memory_order_acquire);
+        }
+    }
+};
+
+template <typename Fn>
+auto WebsocketManager::gated(Fn fn) const {
+    return [gate = callback_gate_, fn = std::move(fn)](auto&&... args) {
+        if (!gate->enter())
+            return;
+        const void* previous = entered_gate;
+        entered_gate = gate.get();
+        try {
+            fn(std::forward<decltype(args)>(args)...);
+        } catch (...) {
+            log_current_exception("socket callback");
+        }
+        entered_gate = previous;
+        gate->leave();
+    };
+}
+
 // Constructor / destructor
 
 WebsocketManager::WebsocketManager(
@@ -143,6 +206,7 @@ WebsocketManager::WebsocketManager(
     bool user_thread_dispatch
 )
     : ws_url_(http_to_ws_url(http_base_url))
+    , callback_gate_(std::make_shared<CallbackGate>())
     , owning_mux_(new slick::stream_buffer_multiplexer(mux_record_size, mux_shm_name))
     , mux_(*owning_mux_.get())
     , handlers_(std::make_shared<HandlerMap>())
@@ -161,6 +225,7 @@ WebsocketManager::WebsocketManager(
     bool user_thread_dispatch
 )
     : ws_url_(http_to_ws_url(http_base_url))
+    , callback_gate_(std::make_shared<CallbackGate>())
     , mux_(mux)
     , handlers_(std::make_shared<HandlerMap>())
     , user_thread_dispatch_(user_thread_dispatch)
@@ -170,11 +235,18 @@ WebsocketManager::WebsocketManager(
 
 WebsocketManager::~WebsocketManager() {
     running_.store(false, std::memory_order_release);
+    // Join first: the ping thread may open() ws_, which must not race the
+    // detach/close below.
     if (ping_thread_.joinable()) {
         ping_thread_.join();
     }
     if (ws_) {
         ws_->detach();
+    }
+    // detach() only stops callbacks that have not started; wait out the ones
+    // already running before any member they touch is destroyed.
+    callback_gate_->close_and_drain(entered_gate == callback_gate_.get() ? 1u : 0u);
+    if (ws_) {
         ws_->close();
     }
 }
@@ -191,10 +263,10 @@ void WebsocketManager::init(
         consumer_cursor_ = mux_.initial_reading_index();
     ws_ = std::make_unique<Websocket>(
         ws_url_,
-        [this]() { on_connected(); },
-        [this]() { on_disconnected(); },
-        [this](const char* data, std::size_t len) { on_message(data, len); },
-        [this](std::string&& err) { on_error(std::move(err)); },
+        gated([this]() { on_connected(); }),
+        gated([this]() { on_disconnected(); }),
+        gated([this](const char* data, std::size_t len) { on_message(data, len); }),
+        gated([this](std::string&& err) { on_error(std::move(err)); }),
         pd,
         write_buffer_size
     );
@@ -214,8 +286,13 @@ void WebsocketManager::on_connected() {
 void WebsocketManager::resubscribe_all() {
     const auto snap = std::atomic_load_explicit(&sub_state_map_, std::memory_order_acquire);
     for (const auto& [identifier, state] : *snap) {
-        (void)identifier;
-        send_subscribe_if_active(state);
+        // One failed replay must not keep the remaining subscriptions off the
+        // new connection.
+        try {
+            send_subscribe_if_active(state);
+        } catch (...) {
+            log_current_exception("resubscribe " + identifier);
+        }
     }
 }
 
@@ -395,7 +472,13 @@ void WebsocketManager::dispatch_message(const char* data, std::size_t len) {
         return;
     }
 
-    const auto identifier = message_to_identifier(msg);
+    std::optional<std::string> identifier;
+    try {
+        identifier = message_to_identifier(msg);
+    } catch (...) {
+        log_current_exception("routing message");
+        return;
+    }
     if (!identifier || *identifier == "pong")
         return;
 
@@ -420,10 +503,9 @@ void WebsocketManager::dispatch_message(const char* data, std::size_t len) {
         try {
             handler->callback(msg);
         } catch (...) {
-            dispatching_handler = previous;
-            if (handler->in_flight.fetch_sub(1, std::memory_order_acq_rel) == 1)
-                handler->in_flight.notify_all();
-            throw;
+            // Isolate each callback: the rest still receive the message, and
+            // an exception never reaches the socket read loop or dispatch().
+            log_current_exception("callback for " + *identifier);
         }
         dispatching_handler = previous;
 
@@ -511,7 +593,7 @@ void WebsocketManager::ping_loop() {
         if (!reconnect_scheduled) {
             reconnect_scheduled = true;
             reconnect_at        = now + retry_delay;
-            LOG_INFO("[WebsocketManager] disconnected — reconnecting in {}ms",
+            LOG_INFO("[WebsocketManager] disconnected - reconnecting in {}ms",
                      std::chrono::duration_cast<std::chrono::milliseconds>(retry_delay).count());
             retry_delay = std::min(retry_delay * 2, kMaxRetryDelay);
             continue;

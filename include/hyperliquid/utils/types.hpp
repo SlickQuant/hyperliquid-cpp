@@ -9,6 +9,18 @@
 
 namespace hyperliquid {
 
+namespace detail {
+
+// Value of a hex digit (either case), or -1 if `c` is not one.
+constexpr int hex_nibble(char c) noexcept {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+} // namespace detail
+
 // ── Time in force ────────────────────────────────────────────────────────────
 
 enum class Tif {
@@ -71,6 +83,10 @@ private:
             throw std::invalid_argument("Cloid must be a hex string starting with 0x");
         if (raw_.size() - 2 != 32)
             throw std::invalid_argument("Cloid must be exactly 16 bytes (32 hex chars after 0x)");
+        for (size_t i = 2; i < raw_.size(); ++i) {
+            if (detail::hex_nibble(raw_[i]) < 0)
+                throw std::invalid_argument("Cloid contains a non-hex character");
+        }
     }
 };
 

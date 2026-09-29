@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <thread>
 
@@ -93,6 +94,57 @@ TEST(UserThreadDispatch, DispatchRoutesMatchingProducerRecordsToCallbacks) {
     EXPECT_EQ(callbacks.load(std::memory_order_relaxed), 1);
 
     manager.unsubscribe({{"type", "allMids"}}, sid);
+}
+
+TEST(UserThreadDispatch, ThrowingCallbackDoesNotStopOtherCallbacksOrDispatch) {
+    slick::stream_buffer_multiplexer mux(16);
+
+    WebsocketManager manager(
+        kLocalBaseUrl,
+        mux,
+        4096,
+        16,
+        nullptr,
+        1024,
+        true);
+
+    std::atomic_int received{0};
+    const nlohmann::json sub{{"type", "allMids"}};
+    const int throwing_sid = manager.subscribe(sub, [](const nlohmann::json&) {
+        throw std::runtime_error("callback failure");
+    });
+    const int non_std_sid = manager.subscribe(sub, [](const nlohmann::json&) {
+        throw 42;
+    });
+    const int sid = manager.subscribe(sub, [&](const nlohmann::json&) {
+        received.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    const std::string payload = all_mids_message();
+    EXPECT_NO_THROW(manager.dispatch(manager.producer_id(), payload.data(), payload.size()));
+    EXPECT_NO_THROW(manager.dispatch(manager.producer_id(), payload.data(), payload.size()));
+    EXPECT_EQ(received.load(std::memory_order_relaxed), 2);
+
+    manager.unsubscribe(sub, throwing_sid);
+    manager.unsubscribe(sub, non_std_sid);
+    manager.unsubscribe(sub, sid);
+}
+
+TEST(UserThreadDispatch, MalformedRoutedMessageIsDropped) {
+    slick::stream_buffer_multiplexer mux(16);
+
+    WebsocketManager manager(
+        kLocalBaseUrl,
+        mux,
+        4096,
+        16,
+        nullptr,
+        1024,
+        true);
+
+    // Valid JSON on a routed channel, but missing the field routing needs.
+    const std::string malformed = R"({"channel":"l2Book","data":{}})";
+    EXPECT_NO_THROW(manager.dispatch(manager.producer_id(), malformed.data(), malformed.size()));
 }
 
 TEST(StreamBufferMultiplexer, SharedMemoryReaderOpensExistingWriterSegments) {

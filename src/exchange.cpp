@@ -65,7 +65,7 @@ Exchange::Exchange(
     , vault_address_(std::move(vault_address))
     , account_address_(std::move(account_address))
     , info_(std::move(info))
-    , is_mainnet_(base_url == MAINNET_API_URL)
+    , is_mainnet_(base_url_ == MAINNET_API_URL) // normalized by Api (no trailing slash)
 {
     wallet_ = private_key_to_address(private_key_);
     info_->load_meta();

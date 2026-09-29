@@ -61,7 +61,7 @@ cd vcpkg
 vcpkg install nlohmann-json openssl zlib gtest
 ```
 
-`slick-net` 3.0.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
+`slick-net` 4.0.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
 
 ```bash
 vcpkg install slick-net
@@ -197,6 +197,12 @@ backoff after disconnects or transport errors, and replays active subscriptions
 after reconnect. Multiple callbacks on the same channel share one server-side
 subscription until the last callback unsubscribes.
 
+An exception thrown by a callback is logged and swallowed. Other callbacks
+still receive the message, and the receive loop keeps running. A message that
+cannot be routed (for example, a known channel with a missing field) is logged
+and dropped. When the manager is destroyed, the destructor waits for socket
+callbacks that are already running to finish before it releases any state.
+
 For applications that need callbacks on their own thread, enable caller-thread dispatch
 and poll queued WebSocket records:
 
@@ -310,6 +316,8 @@ hyperliquid::Exchange exchange(
 ```
 
 The constructor derives `wallet_address()` from the private key and calls `info->load_meta()`.
+Trailing slashes in `base_url` are ignored, both for requests and for choosing
+the mainnet/testnet signing domain.
 
 All methods return `nlohmann::json` with the raw Hyperliquid API response.
 
@@ -411,6 +419,11 @@ hyperliquid::TriggerOrderType{
 auto cloid = hyperliquid::Cloid::from_int(42);
 auto cloid = hyperliquid::Cloid::from_str("0x0000000000000000000000000000002a");
 ```
+
+`Cloid` throws `std::invalid_argument` unless the value is `0x` followed by
+exactly 32 hex digits. Signing is also strict: a non-hex character in a vault
+address or any other hex input, or an EIP-712 `address` field that is not
+exactly 20 bytes, throws `std::invalid_argument` rather than being signed.
 
 ### Builder fee
 

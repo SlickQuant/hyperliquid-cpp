@@ -61,6 +61,8 @@ public:
     // Subscribe to a channel. Returns a subscription_id for later unsubscribe.
     // `subscription` follows the Python SDK format: {"type": "l2Book", "coin": "ETH"}, etc.
     // Throws std::runtime_error if the channel does not support multiple simultaneous subscriptions.
+    // An exception thrown by `callback` is logged and swallowed; it never stops
+    // the receive loop or the delivery of the message to other callbacks.
     int subscribe(const nlohmann::json& subscription,
                   std::function<void(const nlohmann::json&)> callback);
 
@@ -106,6 +108,19 @@ private:
     struct SubscriptionState;
     using SubscriptionStatePtr = std::shared_ptr<SubscriptionState>;
 
+    // Lifetime gate for socket callbacks: an in-flight count plus a closed bit.
+    // The Websocket copies our callbacks into sessions that can outlive this
+    // manager, so they hold the gate (never `this`) by shared_ptr and enter it
+    // before touching the manager. The destructor closes the gate and waits for
+    // callbacks already running to drain.
+    struct CallbackGate;
+
+    // Wraps a socket callback with the lifetime gate and exception isolation:
+    // an exception escaping into the Websocket service thread would end the
+    // read loop without a disconnect, so it is logged and swallowed instead.
+    template <typename Fn>
+    auto gated(Fn fn) const;
+
     void init(
         uint32_t read_buffer_size,
         uint32_t read_control_size,
@@ -129,6 +144,7 @@ private:
     void ping_loop();        // runs in ping_thread_; also manages reconnection
 
     std::string ws_url_;
+    std::shared_ptr<CallbackGate> callback_gate_;
     std::unique_ptr<Websocket> ws_;
 
     std::unique_ptr<slick::stream_buffer_multiplexer> owning_mux_;

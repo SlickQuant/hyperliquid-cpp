@@ -104,6 +104,17 @@ TEST(Cloid, InvalidOnlyPrefixThrows) {
     EXPECT_THROW(Cloid("0x"), std::invalid_argument);
 }
 
+TEST(Cloid, NonHexCharacterThrows) {
+    // Right prefix and length, but 'g' / ' ' / '-' are not hex digits.
+    EXPECT_THROW(Cloid("0xdeadbeefdeadbeefdeadbeefdeadbeeg"), std::invalid_argument);
+    EXPECT_THROW(Cloid("0x deadbeefdeadbeefdeadbeefdeadbee"), std::invalid_argument);
+    EXPECT_THROW(Cloid("0x-deadbeefdeadbeefdeadbeefdeadbee"), std::invalid_argument);
+}
+
+TEST(Cloid, UpperCaseHexAccepted) {
+    EXPECT_NO_THROW(Cloid("0xDEADBEEFDEADBEEFDEADBEEFDEADBEEF"));
+}
+
 // ── OrderRequest defaults ─────────────────────────────────────────────────────
 
 TEST(OrderRequest, DefaultIsBuy) {

@@ -48,9 +48,11 @@ std::vector<uint8_t> hex_to_bytes(std::string_view hex) {
         throw std::invalid_argument("hex_to_bytes: odd length hex string");
     std::vector<uint8_t> out(hex.size() / 2);
     for (size_t i = 0; i < out.size(); ++i) {
-        unsigned v = 0;
-        std::sscanf(hex.data() + i * 2, "%02x", &v);
-        out[i] = static_cast<uint8_t>(v);
+        const int hi = detail::hex_nibble(hex[i * 2]);
+        const int lo = detail::hex_nibble(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0)
+            throw std::invalid_argument("hex_to_bytes: non-hex character");
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
     }
     return out;
 }
@@ -212,8 +214,9 @@ std::array<uint8_t, 32> encode_eip712_field(
     } else if (solidity_type == "address") {
         auto hx = value.get<std::string>();
         auto b = hex_to_bytes(hx);
-        size_t n = std::min(b.size(), size_t{20});
-        std::copy_n(b.begin(), n, out.begin() + (32 - n));
+        if (b.size() != 20)
+            throw std::invalid_argument("EIP-712 address must be 20 bytes");
+        std::copy_n(b.begin(), b.size(), out.begin() + 12);
     } else if (solidity_type == "bool") {
         out[31] = value.get<bool>() ? 1 : 0;
     } else if (solidity_type == "uint256" || solidity_type == "uint64") {

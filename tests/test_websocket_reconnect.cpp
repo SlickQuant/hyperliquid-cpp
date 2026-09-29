@@ -10,7 +10,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -28,9 +30,11 @@ using tcp = boost::asio::ip::tcp;
 
 class RecordingWebsocketServer {
 public:
-    RecordingWebsocketServer()
+    // `push_on_subscribe` is sent to the client after each subscribe it sends.
+    explicit RecordingWebsocketServer(std::vector<std::string> push_on_subscribe = {})
         : acceptor_(ioc_, tcp::endpoint(boost::asio::ip::make_address("127.0.0.1"), 0))
         , port_(acceptor_.local_endpoint().port())
+        , push_on_subscribe_(std::move(push_on_subscribe))
     {
         start_accept();
         io_thread_ = std::thread([this] { ioc_.run(); });
@@ -93,17 +97,29 @@ private:
             if (ec)
                 return;
 
+            std::string text = boost::beast::buffers_to_string(buffer.data());
+            const bool is_subscribe = text.find(R"("method":"subscribe")") != std::string::npos;
             {
                 std::lock_guard lock(messages_mutex_);
-                messages_.push_back(boost::beast::buffers_to_string(buffer.data()));
+                messages_.push_back(std::move(text));
             }
             messages_cv_.notify_all();
+
+            if (is_subscribe) {
+                for (const auto& push : push_on_subscribe_) {
+                    ws.text(true);
+                    ws.write(boost::asio::buffer(push), ec);
+                    if (ec)
+                        return;
+                }
+            }
         }
     }
 
     boost::asio::io_context ioc_;
     tcp::acceptor acceptor_;
     unsigned short port_;
+    std::vector<std::string> push_on_subscribe_;
     std::atomic_bool stop_{false};
     std::thread io_thread_;
     std::vector<std::thread> sessions_;
@@ -112,6 +128,17 @@ private:
     std::condition_variable messages_cv_;
     std::vector<std::string> messages_;
 };
+
+template <typename Pred>
+bool wait_until(Pred pred, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!pred()) {
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
 
 std::size_t count_method(const std::vector<std::string>& messages, std::string_view method) {
     std::size_t count = 0;
@@ -344,4 +371,62 @@ TEST(SubscriptionTracking, ConcurrentSubscribeUnsubscribeNoRace) {
 
     for (int id : ids1) mgr.unsubscribe({{"type", "allMids"}}, id);
     for (int id : ids2) mgr.unsubscribe({{"type", "trades"}, {"coin", "ETH"}}, id);
+}
+
+// ── service-thread callbacks: exception isolation and shutdown ────────────────
+// Callbacks here run on the Websocket service thread (user_thread_dispatch=false).
+
+TEST(ServiceThreadDispatch, ThrowingCallbackAndMalformedMessageKeepReceiveLoopAlive) {
+    // A routed channel with a missing field makes message_to_identifier() throw.
+    const std::string all_mids = R"({"channel":"allMids","data":{"mids":{"ETH":"1000.0"}}})";
+    RecordingWebsocketServer server({
+        R"({"channel":"l2Book","data":{}})",
+        all_mids,
+        all_mids,
+        all_mids,
+    });
+    slick::stream_buffer_multiplexer mux(16);
+    WebsocketManager mgr(server.base_url(), mux, 4096, 16, nullptr, 1024, /*user_thread_dispatch=*/false);
+
+    std::atomic_int thrown{0};
+    std::atomic_int received{0};
+    const nlohmann::json sub{{"type", "allMids"}};
+    const int throwing_sid = mgr.subscribe(sub, [&](const nlohmann::json&) {
+        thrown.fetch_add(1, std::memory_order_relaxed);
+        throw std::runtime_error("callback failure");
+    });
+    const int sid = mgr.subscribe(sub, [&](const nlohmann::json&) {
+        received.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    // Before the fix the first exception escaped into the socket read loop,
+    // which then stopped reading without reporting a disconnect.
+    EXPECT_TRUE(wait_until([&] { return received.load() == 3; }, std::chrono::seconds(5)));
+    EXPECT_EQ(thrown.load(), 3);
+
+    mgr.unsubscribe(sub, throwing_sid);
+    mgr.unsubscribe(sub, sid);
+}
+
+TEST(ServiceThreadDispatch, DestructorWaitsForInFlightCallback) {
+    RecordingWebsocketServer server({R"({"channel":"allMids","data":{"mids":{"ETH":"1000.0"}}})"});
+    slick::stream_buffer_multiplexer mux(16);
+    auto mgr = std::make_unique<WebsocketManager>(
+        server.base_url(), mux, 4096, 16, nullptr, 1024, /*user_thread_dispatch=*/false);
+
+    std::atomic_bool entered{false};
+    std::atomic_bool finished{false};
+    mgr->subscribe({{"type", "allMids"}}, [&](const nlohmann::json&) {
+        entered.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        finished.store(true, std::memory_order_release);
+    });
+
+    ASSERT_TRUE(wait_until([&] { return entered.load(std::memory_order_acquire); },
+                           std::chrono::seconds(5)));
+
+    // The callback is still running on the service thread with `this`
+    // captured; destruction must not complete underneath it.
+    mgr.reset();
+    EXPECT_TRUE(finished.load(std::memory_order_acquire));
 }

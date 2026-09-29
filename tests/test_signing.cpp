@@ -134,6 +134,25 @@ TEST(HexUtils, OddLengthThrows) {
     EXPECT_THROW(hex_to_bytes("0xabc"), std::invalid_argument);
 }
 
+TEST(HexUtils, NonHexCharacterThrows) {
+    // sscanf("%02x") used to leave these as 0x00 (or accept a sign/space).
+    EXPECT_THROW(hex_to_bytes("0xzz"),   std::invalid_argument);
+    EXPECT_THROW(hex_to_bytes("0xa-"),   std::invalid_argument);
+    EXPECT_THROW(hex_to_bytes("0x-1"),   std::invalid_argument);
+    EXPECT_THROW(hex_to_bytes("0x 1"),   std::invalid_argument);
+    EXPECT_THROW(hex_to_bytes("0x+f"),   std::invalid_argument);
+    EXPECT_THROW(hex_to_bytes("0x0x12"), std::invalid_argument);
+}
+
+TEST(HexUtils, InvalidVaultAddressRejectedBySigning) {
+    nlohmann::ordered_json action;
+    action["type"] = "cancel";
+    // 40 chars after 0x, so the length check alone would pass.
+    const std::string vault = "0xZZ34567890abcdef1234567890abcdef12345678";
+
+    EXPECT_THROW(action_hash(action, vault, 1000LL), std::invalid_argument);
+}
+
 TEST(HexUtils, AllZeroes20Bytes) {
     std::vector<uint8_t> zeros(20, 0x00);
     EXPECT_EQ(bytes_to_hex(zeros.data(), zeros.size()),
@@ -635,6 +654,37 @@ TEST(SignUserSignedAction, UsdClassTransferUsesNonceField) {
     EXPECT_NO_THROW(
         sign_user_signed_action(kTestKey, action, types,
                                 "HyperliquidTransaction:UsdClassTransfer", false));
+}
+
+TEST(SignUserSignedAction, AddressFieldMustBe20Bytes) {
+    const std::vector<std::pair<std::string, std::string>> types = {
+        {"hyperliquidChain", "string"},
+        {"agentAddress",     "address"},
+        {"agentName",        "string"},
+        {"nonce",            "uint64"},
+    };
+    auto make_action = [](std::string agent) {
+        nlohmann::ordered_json a;
+        a["type"]         = "approveAgent";
+        a["agentAddress"] = std::move(agent);
+        a["agentName"]    = "";
+        a["nonce"]        = 1000LL;
+        return a;
+    };
+
+    auto valid = make_action("0x00000000000000000000000000000000000000aa");
+    EXPECT_NO_THROW(sign_user_signed_action(kTestKey, valid, types,
+                                            "HyperliquidTransaction:ApproveAgent", false));
+
+    // Used to be silently left-padded / truncated to 20 bytes and signed.
+    auto too_short = make_action("0xaa");
+    EXPECT_THROW(sign_user_signed_action(kTestKey, too_short, types,
+                                         "HyperliquidTransaction:ApproveAgent", false),
+                 std::invalid_argument);
+    auto too_long = make_action("0x" + std::string(42, 'a'));
+    EXPECT_THROW(sign_user_signed_action(kTestKey, too_long, types,
+                                         "HyperliquidTransaction:ApproveAgent", false),
+                 std::invalid_argument);
 }
 
 // ── get_timestamp_ms ──────────────────────────────────────────────────────────
