@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-10-02
+
+### Changed
+- Require `slick-net` 4.0.0 (was 3.0.0) in `find_package`, the `FetchContent` fallback tag, and the installed `hyperliquid-config.cmake` `find_dependency`.
+- Exceptions thrown by subscription callbacks are now logged and swallowed instead of propagating. This includes `Info::dispatch()` / `WebsocketManager::dispatch()` in user-thread dispatch mode, which no longer rethrow callback exceptions.
+- Inputs that were previously accepted and signed silently are now rejected (see Fixed): malformed `Cloid` values, non-hex characters in hex inputs, EIP-712 `address` fields that are not 20 bytes, and malformed or out-of-range private keys.
+
+### Fixed
+- A throwing subscription callback or a malformed routed message (a known channel with a missing field) stopped the WebSocket receive loop without triggering a reconnect. Routing and each callback are now isolated with logging, so the other callbacks still receive the message and the receive loop keeps running.
+- Use-after-free when a `WebsocketManager` was destroyed while a socket callback was still running. Socket callbacks now enter a lock-free lifetime gate held by `shared_ptr`, and the destructor waits for callbacks already running to finish before releasing state. Destroying the manager from inside its own callback does not deadlock.
+- The `WebsocketManager` destructor now joins the ping thread before detaching the socket, so a reconnect `open()` from the ping thread can no longer race the shutdown.
+- Reconnect replay now continues with the remaining subscriptions when resending one of them fails.
+- A mainnet URL with a trailing slash (e.g. `https://api.hyperliquid.xyz/`) sent requests to mainnet but signed them for testnet (`hyperliquidChain: "Testnet"`). `Exchange` now detects mainnet from the normalized base URL.
+- `Cloid` accepted non-hex characters as long as the prefix and length were correct.
+- `hex_to_bytes()` ignored failed `sscanf` conversions (and accepted signs and spaces), so an invalid vault address could be encoded as zero bytes and signed. It now throws `std::invalid_argument` on any non-hex character.
+- EIP-712 `address` fields of the wrong length were silently padded or truncated to 20 bytes and signed; they now throw `std::invalid_argument`.
+- Private keys were parsed with `BN_hex2bn`, which stops at the first non-hex character, so a malformed key loaded as a different key and signed with the wrong wallet. Keys must now be exactly 64 hex digits (optional `0x` prefix) within the secp256k1 range `[1, n-1]`; otherwise `std::runtime_error` is thrown.
+
+### Tests
+- `ServiceThreadDispatch.ThrowingCallbackAndMalformedMessageKeepReceiveLoopAlive` — a malformed `l2Book` message and a throwing callback do not stop delivery of subsequent messages on the socket thread.
+- `ServiceThreadDispatch.DestructorWaitsForInFlightCallback` — destroying the manager does not complete while a socket callback is still running.
+- `UserThreadDispatch.ThrowingCallbackDoesNotStopOtherCallbacksOrDispatch` and `UserThreadDispatch.MalformedRoutedMessageIsDropped` — the same isolation in user-thread dispatch mode.
+- `ExchangeNetwork.MainnetUrlWithTrailingSlashSignsForMainnet` — a mainnet URL with trailing slashes signs transfers with `hyperliquidChain: "Mainnet"`.
+- `Cloid.NonHexCharacterThrows`, `Cloid.UpperCaseHexAccepted`, `HexUtils.NonHexCharacterThrows`, `HexUtils.InvalidVaultAddressRejectedBySigning`, `SignUserSignedAction.AddressFieldMustBe20Bytes` — hex and address validation.
+- `PrivateKeyToAddress.MalformedKeyThrows`, `PrivateKeyToAddress.OutOfRangeKeyThrows`, `PrivateKeyToAddress.MaxValidKeyAccepted` — private key format and range validation.
+- The in-process test WebSocket server can now push scripted messages after each subscribe.
+
 ## [0.3.0] - 2026-07-07
 
 ### Added

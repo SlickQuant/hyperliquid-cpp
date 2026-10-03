@@ -316,6 +316,8 @@ hyperliquid::Exchange exchange(
 ```
 
 The constructor derives `wallet_address()` from the private key and calls `info->load_meta()`.
+The private key must be exactly 64 hex digits (optional `0x` prefix) and a valid
+secp256k1 key; otherwise the constructor throws `std::runtime_error`.
 Trailing slashes in `base_url` are ignored, both for requests and for choosing
 the mainnet/testnet signing domain.
 
@@ -553,7 +555,7 @@ cmake --build build --config Debug --target hyperliquid_tests
 ctest --test-dir build -C Debug -R hyperliquid_tests -V
 ```
 
-Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, channel identifier generation, caller-thread WebSocket dispatch routing, lock-free reconnect subscription tracking, and shared-memory stream-buffer attachment.
+Covers: Keccak-256 vectors, EIP-712 signing round-trips, type serialisation (`float_to_wire`, `Cloid`, `Tif`), WebSocket URL conversion, channel identifier generation, caller-thread WebSocket dispatch routing, WebSocket callback exception isolation and shutdown safety, lock-free reconnect subscription tracking, signing input validation (hex, addresses, private keys, mainnet detection), and shared-memory stream-buffer attachment.
 
 ### Integration tests (requires testnet)
 
