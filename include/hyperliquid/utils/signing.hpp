@@ -76,6 +76,7 @@ Signature sign_user_signed_action(
 // ── Key utilities ─────────────────────────────────────────────────────────────
 
 // Derive Ethereum address (checksummed lower-case "0x...") from secp256k1 private key hex.
+// The key must be exactly 64 hex chars (optional "0x" prefix) and in [1, n-1].
 // Throws std::runtime_error on invalid key or OpenSSL failure.
 std::string private_key_to_address(std::string_view private_key_hex);
 

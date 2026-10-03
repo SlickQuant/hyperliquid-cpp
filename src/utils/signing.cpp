@@ -334,16 +334,32 @@ namespace {
 
 // Parse private key hex → EC_KEY with secp256k1 curve (also sets public key)
 EC_KEY* load_ec_key(std::string_view priv_hex) {
-    std::string hex(priv_hex);
-    if (hex.starts_with("0x") || hex.starts_with("0X"))
-        hex = hex.substr(2);
+    if (priv_hex.starts_with("0x") || priv_hex.starts_with("0X"))
+        priv_hex.remove_prefix(2);
 
+    // BN_hex2bn stops at the first non-hex character and still succeeds, so a
+    // malformed key would load as a different key. Require exactly 32 bytes.
+    if (priv_hex.size() != 64)
+        throw std::runtime_error("Private key must be 32 bytes (64 hex chars)");
+    for (char c : priv_hex) {
+        if (detail::hex_nibble(c) < 0)
+            throw std::runtime_error("Private key contains a non-hex character");
+    }
+
+    const std::string hex(priv_hex);
     BIGNUM* priv_bn = nullptr;
     if (!BN_hex2bn(&priv_bn, hex.c_str()))
         throw std::runtime_error("Failed to parse private key hex");
 
     EC_KEY* key = EC_KEY_new_by_curve_name(NID_secp256k1);
     if (!key) { BN_free(priv_bn); throw std::runtime_error("EC_KEY_new failed"); }
+
+    // A valid secp256k1 private key is in [1, n-1].
+    if (BN_is_zero(priv_bn) ||
+        BN_cmp(priv_bn, EC_GROUP_get0_order(EC_KEY_get0_group(key))) >= 0) {
+        BN_free(priv_bn); EC_KEY_free(key);
+        throw std::runtime_error("Private key is out of the secp256k1 range");
+    }
 
     if (EC_KEY_set_private_key(key, priv_bn) != 1) {
         BN_free(priv_bn); EC_KEY_free(key);

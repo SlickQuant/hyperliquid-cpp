@@ -204,6 +204,36 @@ TEST(PrivateKeyToAddress, DifferentKeysDifferentAddresses) {
     EXPECT_NE(private_key_to_address(pk0), private_key_to_address(pk1));
 }
 
+TEST(PrivateKeyToAddress, MalformedKeyThrows) {
+    const std::string valid =
+        "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    // BN_hex2bn used to parse up to the first bad character and load the
+    // shorter prefix as a different key.
+    EXPECT_THROW(private_key_to_address("0x" + valid.substr(0, 62) + "zz"), std::runtime_error);
+    EXPECT_THROW(private_key_to_address("0x" + valid.substr(0, 30) + " " + valid.substr(31)),
+                 std::runtime_error);
+    EXPECT_THROW(private_key_to_address("0x" + valid.substr(0, 62)), std::runtime_error);
+    EXPECT_THROW(private_key_to_address("0x" + valid + "00"), std::runtime_error);
+    EXPECT_THROW(private_key_to_address(""), std::runtime_error);
+    EXPECT_THROW(private_key_to_address("0x"), std::runtime_error);
+}
+
+TEST(PrivateKeyToAddress, OutOfRangeKeyThrows) {
+    // Zero and the secp256k1 order n are not valid private keys.
+    EXPECT_THROW(private_key_to_address("0x" + std::string(64, '0')), std::runtime_error);
+    EXPECT_THROW(private_key_to_address(
+                     "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"),
+                 std::runtime_error);
+    EXPECT_THROW(private_key_to_address("0x" + std::string(64, 'f')), std::runtime_error);
+}
+
+TEST(PrivateKeyToAddress, MaxValidKeyAccepted) {
+    // n - 1 is the largest valid key.
+    EXPECT_NO_THROW(private_key_to_address(
+        "0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140"));
+}
+
 // ── order_request_to_wire ────────────────────────────────────────────────────
 
 TEST(OrderRequestToWire, LimitGtcBuy) {
