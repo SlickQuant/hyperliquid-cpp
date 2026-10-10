@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.1] - 2026-10-10
+
+### Changed
+- Require `slick-net` 4.1.0 (was 4.0.0) in `find_package`, the `FetchContent` fallback tag, and the installed `hyperliquid-config.cmake` `find_dependency`.
+- The minimum `slick-net` version is now defined once as `SLICK_NET_MIN_VERSION` in `CMakeLists.txt` and reused by all three places, so they can no longer drift apart.
+
 ## [0.4.0] - 2026-10-02
 
 ### Changed

@@ -61,7 +61,7 @@ cd vcpkg
 vcpkg install nlohmann-json openssl zlib gtest
 ```
 
-`slick-net` 4.0.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
+`slick-net` 4.1.0 is the HTTP/WebSocket library used by this SDK. Install it through its own distribution and register it in the same vcpkg instance:
 
 ```bash
 vcpkg install slick-net
