@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(hyperliquid-cpp VERSION 0.4.1 LANGUAGES CXX)
+project(hyperliquid-cpp VERSION 0.4.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,7 +15,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(OpenSSL CONFIG REQUIRED)
 find_package(ZLIB REQUIRED)
 
-set(SLICK_NET_MIN_VERSION 4.1.0)
+set(SLICK_NET_MIN_VERSION 4.1.1)
 
 find_package(slick-net ${SLICK_NET_MIN_VERSION} CONFIG QUIET)
 if (NOT slick-net_FOUND)

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.2] - 2026-10-18
+
+### Changed
+- Require `slick-net` 4.1.1 (was 4.1.0).
+
 ## [0.4.1] - 2026-10-10
 
 ### Changed
